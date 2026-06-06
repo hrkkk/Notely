@@ -1,12 +1,12 @@
 [package]
-name = "notepad"
+name = "notely"
 version = "0.1.0"
 description = "A lightweight cross-platform text editor."
-authors = ["Notepad"]
+authors = ["Notely"]
 edition = "2021"
 
 [lib]
-name = "notepad_lib"
+name = "notely_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
