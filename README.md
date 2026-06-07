@@ -40,11 +40,3 @@ npm run tauri:dev
 ```text
 src-tauri\target\release\bundle
 ```
-
-## 后续方向
-
-- CodeMirror 6 编辑器核心
-- tree-sitter 或 LSP 语言能力
-- 编码检测和换行符模式
-- 大文件分块加载
-- 主题、字体和缩进设置

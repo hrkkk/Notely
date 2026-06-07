@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { createHighlighter } from "shiki";
 import {
   ChevronDown,
   ChevronUp,
@@ -9,6 +12,7 @@ import {
   Save,
   SaveAll,
   Search,
+  List,
   Settings2,
   X,
   WrapText
@@ -19,6 +23,15 @@ type FilePayload = {
   path: string;
   name: string;
   content: string;
+  encoding: string;
+  line_ending: LineEnding;
+  modified_ms?: number | null;
+  size?: number;
+};
+
+type FileState = {
+  modified_ms?: number | null;
+  size: number;
 };
 
 type DocumentTab = {
@@ -27,6 +40,12 @@ type DocumentTab = {
   path: string | null;
   content: string;
   savedContent: string;
+  encoding: string;
+  savedEncoding: string;
+  lineEnding: LineEnding;
+  savedLineEnding: LineEnding;
+  diskModifiedMs: number | null;
+  diskSize: number | null;
   language: string;
   history: string[];
 };
@@ -38,6 +57,14 @@ type SearchMatch = {
 
 type ReplaceScope = "all" | "selection";
 type StartupPolicy = "new" | "restore";
+type LineEnding = "LF" | "CRLF" | "CR";
+type EncodingAction = "reopen" | "save";
+
+type SearchOptions = {
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  regex: boolean;
+};
 
 type SessionPayload = {
   tabs: DocumentTab[];
@@ -130,6 +157,7 @@ const fontSettingsKey = "notely.fontSettings";
 const languageFontSettingsKey = "notely.languageFontSettings";
 const startupPolicyKey = "notely.startupPolicy";
 const sessionKey = "notely.session";
+const maxStoredSessionContentLength = 1_000_000;
 const fontFamilies = [
   "Cascadia Mono",
   "JetBrains Mono",
@@ -140,6 +168,72 @@ const fontFamilies = [
   "Segoe UI"
 ];
 const fontSizes = ["12", "13", "14", "15", "16", "18", "20", "22"];
+const textMateTheme = "github-light";
+const textMateLanguageByName: Record<string, string> = {
+  "c": "c",
+  "c#": "csharp",
+  "c++": "cpp",
+  "cmake": "cmake",
+  "css": "css",
+  "go": "go",
+  "html": "html",
+  "java": "java",
+  "javascript": "javascript",
+  "json": "json",
+  "kotlin": "kotlin",
+  "lua": "lua",
+  "markdown": "markdown",
+  "php": "php",
+  "plain text": "text",
+  "python": "python",
+  "ruby": "ruby",
+  "rust": "rust",
+  "shell": "shellscript",
+  "sql": "sql",
+  "typescript": "typescript",
+  "yaml": "yaml"
+};
+const textMateLanguageByExtension: Record<string, string> = {
+  bash: "shellscript",
+  c: "c",
+  cc: "cpp",
+  cmake: "cmake",
+  cpp: "cpp",
+  cs: "csharp",
+  css: "css",
+  go: "go",
+  h: "c",
+  hpp: "cpp",
+  htm: "html",
+  html: "html",
+  java: "java",
+  js: "javascript",
+  json: "json",
+  kt: "kotlin",
+  kts: "kotlin",
+  lua: "lua",
+  md: "markdown",
+  php: "php",
+  ps1: "powershell",
+  py: "python",
+  rb: "ruby",
+  rs: "rust",
+  scss: "scss",
+  sh: "shellscript",
+  sql: "sql",
+  ts: "typescript",
+  tsx: "tsx",
+  xml: "xml",
+  yaml: "yaml",
+  yml: "yaml",
+  zsh: "shellscript"
+};
+const encodingOptions = ["UTF-8", "UTF-8 BOM", "UTF-16 LE", "UTF-16 BE", "GBK", "Windows-1252"];
+const lineEndingOptions: Array<{ value: LineEnding; label: string; detail: string }> = [
+  { value: "LF", label: "LF", detail: "\\n" },
+  { value: "CRLF", label: "CRLF", detail: "\\r\\n" },
+  { value: "CR", label: "CR", detail: "\\r" }
+];
 const defaultFontChoice: FontChoice = {
   family: "Cascadia Mono",
   size: "14"
@@ -361,9 +455,62 @@ function normalizeKeywordGroups(value: CustomLanguageConfig) {
   };
 }
 
+function stripJsonComments(value: string) {
+  let result = "";
+  let inString = false;
+  let quote = "";
+  let escaped = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const current = value[index];
+    const next = value[index + 1];
+
+    if (inString) {
+      result += current;
+      if (escaped) {
+        escaped = false;
+      } else if (current === "\\") {
+        escaped = true;
+      } else if (current === quote) {
+        inString = false;
+        quote = "";
+      }
+      continue;
+    }
+
+    if (current === "\"" || current === "'") {
+      inString = true;
+      quote = current;
+      result += current;
+      continue;
+    }
+
+    if (current === "/" && next === "/") {
+      while (index < value.length && value[index] !== "\n") {
+        index += 1;
+      }
+      result += "\n";
+      continue;
+    }
+
+    if (current === "/" && next === "*") {
+      index += 2;
+      while (index < value.length && !(value[index] === "*" && value[index + 1] === "/")) {
+        index += 1;
+      }
+      index += 1;
+      continue;
+    }
+
+    result += current;
+  }
+
+  return result;
+}
+
 function parseCustomLanguages(raw: string): LanguageDefinition[] {
   try {
-    const parsed = JSON.parse(raw) as CustomLanguageConfig[];
+    const parsed = JSON.parse(stripJsonComments(raw)) as CustomLanguageConfig[];
     if (!Array.isArray(parsed)) {
       return [];
     }
@@ -441,6 +588,28 @@ function saveStartupPolicy(policy: StartupPolicy) {
   window.localStorage.setItem(startupPolicyKey, policy);
 }
 
+function isTabDirty(tab: DocumentTab) {
+  return (
+    tab.content !== tab.savedContent ||
+    tab.encoding !== tab.savedEncoding ||
+    tab.lineEnding !== tab.savedLineEnding
+  );
+}
+
+function fileStateFromPayload(file: FilePayload) {
+  return {
+    diskModifiedMs: file.modified_ms ?? null,
+    diskSize: file.size ?? null
+  };
+}
+
+function hasFileStateChanged(tab: DocumentTab, state: FileState | null) {
+  if (!state) {
+    return true;
+  }
+  return tab.diskModifiedMs !== (state.modified_ms ?? null) || tab.diskSize !== state.size;
+}
+
 function isValidTab(value: DocumentTab) {
   return (
     value &&
@@ -462,13 +631,23 @@ function loadInitialSession(): SessionPayload {
     if (!raw) {
       throw new Error("empty session");
     }
+    if (raw.length > maxStoredSessionContentLength) {
+      window.localStorage.removeItem(sessionKey);
+      throw new Error("session too large");
+    }
 
     const parsed = JSON.parse(raw) as SessionPayload;
     const tabs = Array.isArray(parsed.tabs)
-      ? parsed.tabs.filter(isValidTab).map((tab) => ({
+        ? parsed.tabs.filter(isValidTab).map((tab) => ({
           ...tab,
           path: tab.path ?? null,
           language: tab.language || "Plain Text",
+          encoding: tab.encoding || "UTF-8",
+          savedEncoding: tab.savedEncoding || tab.encoding || "UTF-8",
+          lineEnding: tab.lineEnding || "LF",
+          savedLineEnding: tab.savedLineEnding || tab.lineEnding || "LF",
+          diskModifiedMs: tab.diskModifiedMs ?? null,
+          diskSize: tab.diskSize ?? null,
           history: []
         }))
       : [];
@@ -489,9 +668,25 @@ function loadInitialSession(): SessionPayload {
 function saveSession(tabs: DocumentTab[], activeId: string) {
   const payload: SessionPayload = {
     activeId,
-    tabs: tabs.map((tab) => ({ ...tab, history: [] }))
+    tabs: tabs.map((tab) => {
+      const canStoreContent = !tab.path || tab.content.length <= maxStoredSessionContentLength / 4;
+      return {
+        ...tab,
+        content: canStoreContent ? tab.content : "",
+        savedContent: canStoreContent ? tab.savedContent : "",
+        history: []
+      };
+    })
   };
-  window.localStorage.setItem(sessionKey, JSON.stringify(payload));
+  const serialized = JSON.stringify(payload);
+  if (serialized.length > maxStoredSessionContentLength) {
+    window.localStorage.setItem(sessionKey, JSON.stringify({
+      activeId,
+      tabs: [createEmptyTab()]
+    }));
+    return;
+  }
+  window.localStorage.setItem(sessionKey, serialized);
 }
 
 function detectLanguage(name: string, customLanguages: LanguageDefinition[]) {
@@ -522,6 +717,53 @@ function getLanguageDefinition(name: string, customLanguages: LanguageDefinition
   );
 }
 
+function getTextMateLanguage(language: LanguageDefinition) {
+  const byName = textMateLanguageByName[language.name.toLowerCase()];
+  if (byName) {
+    return byName;
+  }
+
+  for (const extension of language.extensions) {
+    const byExtension = textMateLanguageByExtension[extension.toLowerCase()];
+    if (byExtension) {
+      return byExtension;
+    }
+  }
+
+  return undefined;
+}
+
+function renderTextMateTokens(
+  highlighter: Awaited<ReturnType<typeof createHighlighter>>,
+  content: string,
+  language: string
+) {
+  const result = highlighter.codeToTokens(content, {
+    lang: language as never,
+    theme: textMateTheme as never
+  });
+
+  const nodes: ReactNode[] = [];
+  result.tokens.forEach((line, lineIndex) => {
+    line.forEach((token, tokenIndex) => {
+      const style: CSSProperties = {};
+      if (token.color) {
+        style.color = token.color;
+      }
+      nodes.push(
+        <span key={`${lineIndex}-${tokenIndex}`} style={style}>
+          {token.content}
+        </span>
+      );
+    });
+    if (lineIndex < result.tokens.length - 1) {
+      nodes.push("\n");
+    }
+  });
+
+  return nodes.length ? nodes : [content];
+}
+
 function createEmptyTab(): DocumentTab {
   return {
     id: createId(),
@@ -529,7 +771,30 @@ function createEmptyTab(): DocumentTab {
     path: null,
     content: "",
     savedContent: "",
+    encoding: "UTF-8",
+    savedEncoding: "UTF-8",
+    lineEnding: "LF",
+    savedLineEnding: "LF",
+    diskModifiedMs: null,
+    diskSize: null,
     language: "Plain Text",
+    history: []
+  };
+}
+
+function createTabFromFile(file: FilePayload, customLanguages: LanguageDefinition[]): DocumentTab {
+  return {
+    id: createId(),
+    name: file.name,
+    path: file.path,
+    content: file.content,
+    savedContent: file.content,
+    encoding: file.encoding,
+    savedEncoding: file.encoding,
+    lineEnding: file.line_ending,
+    savedLineEnding: file.line_ending,
+    ...fileStateFromPayload(file),
+    language: detectLanguage(file.name, customLanguages),
     history: []
   };
 }
@@ -538,6 +803,38 @@ function lineAndColumn(content: string, cursor: number) {
   const beforeCursor = content.slice(0, cursor);
   const lines = beforeCursor.split("\n");
   return { line: lines.length, column: lines[lines.length - 1].length + 1 };
+}
+
+function buildLineStarts(content: string) {
+  const starts = [0];
+  for (let index = 0; index < content.length; index += 1) {
+    if (content[index] === "\n") {
+      starts.push(index + 1);
+    }
+  }
+  return starts;
+}
+
+function getLineIndexAtOffset(lineStarts: number[], offset: number) {
+  let low = 0;
+  let high = lineStarts.length - 1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (lineStarts[middle] <= offset) {
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return Math.max(0, high);
+}
+
+function lineAndColumnFromStarts(content: string, cursor: number, lineStarts: number[]) {
+  const lineIndex = getLineIndexAtOffset(lineStarts, cursor);
+  return {
+    line: lineIndex + 1,
+    column: cursor - lineStarts[lineIndex] + 1
+  };
 }
 
 function findMatches(content: string, query: string): SearchMatch[] {
@@ -560,6 +857,59 @@ function findMatches(content: string, query: string): SearchMatch[] {
 
 function isIdentifierCharacter(value: string) {
   return /[\p{L}\p{N}_$]/u.test(value);
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isWholeWordMatch(content: string, start: number, end: number) {
+  const before = start === 0 ? "" : content[start - 1];
+  const after = end >= content.length ? "" : content[end];
+  return !isIdentifierCharacter(before) && !isIdentifierCharacter(after);
+}
+
+function createSearchRegex(query: string, options: SearchOptions) {
+  const source = options.regex ? query : escapeRegExp(query);
+  return new RegExp(source, `g${options.caseSensitive ? "" : "i"}`);
+}
+
+function findMatchesInRange(content: string, query: string, options: SearchOptions, start: number, end: number) {
+  if (!query || start >= end) {
+    return [];
+  }
+
+  const matches: SearchMatch[] = [];
+  const segment = content.slice(start, end);
+
+  if (options.regex || options.wholeWord) {
+    const regex = createSearchRegex(query, options);
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(segment))) {
+      const value = match[0];
+      if (!value) {
+        regex.lastIndex += 1;
+        continue;
+      }
+
+      const absoluteStart = start + match.index;
+      const absoluteEnd = absoluteStart + value.length;
+      if (!options.wholeWord || isWholeWordMatch(content, absoluteStart, absoluteEnd)) {
+        matches.push({ start: absoluteStart, end: absoluteEnd });
+      }
+    }
+    return matches;
+  }
+
+  const haystack = options.caseSensitive ? segment : segment.toLowerCase();
+  const needle = options.caseSensitive ? query : query.toLowerCase();
+  let index = haystack.indexOf(needle);
+  while (index !== -1) {
+    matches.push({ start: start + index, end: start + index + query.length });
+    index = haystack.indexOf(needle, index + Math.max(query.length, 1));
+  }
+
+  return matches;
 }
 
 function getWordRangeAt(content: string, cursor: number): SearchMatch | null {
@@ -792,6 +1142,8 @@ export default function App() {
   const [activeId, setActiveId] = useState(() => initialSession.activeId);
   const [status, setStatus] = useState("就绪");
   const [customLanguages, setCustomLanguages] = useState<LanguageDefinition[]>([]);
+  const [textMateHighlighter, setTextMateHighlighter] = useState<Awaited<ReturnType<typeof createHighlighter>> | null>(null);
+  const [textMateLoadVersion, setTextMateLoadVersion] = useState(0);
   const [globalFont, setGlobalFont] = useState<FontChoice>(() => loadFontChoice());
   const [languageFonts, setLanguageFonts] = useState<Record<string, LanguageFontChoice>>(() => loadLanguageFontChoices());
   const [selectedFontLanguage, setSelectedFontLanguage] = useState("Plain Text");
@@ -799,25 +1151,42 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<"editor" | "languages">("editor");
   const [isLanguagePickerOpen, setIsLanguagePickerOpen] = useState(false);
+  const [isEncodingPickerOpen, setIsEncodingPickerOpen] = useState(false);
+  const [encodingAction, setEncodingAction] = useState<EncodingAction>("reopen");
+  const [isLineEndingPickerOpen, setIsLineEndingPickerOpen] = useState(false);
   const [languageSearch, setLanguageSearch] = useState("");
   const [query, setQuery] = useState("");
+  const [searchOptions, setSearchOptions] = useState<SearchOptions>({
+    caseSensitive: false,
+    wholeWord: false,
+    regex: false
+  });
+  const [matches, setMatches] = useState<SearchMatch[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const [isSearchResultsOpen, setIsSearchResultsOpen] = useState(false);
   const [replaceText, setReplaceText] = useState("");
   const [replaceScope, setReplaceScope] = useState<ReplaceScope>("all");
   const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
   const [wordWrap, setWordWrap] = useState(true);
   const [cursor, setCursor] = useState(0);
   const [wordHighlight, setWordHighlight] = useState("");
+  const [editorViewport, setEditorViewport] = useState({ scrollTop: 0, height: 0 });
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const editorPaneRef = useRef<HTMLDivElement | null>(null);
   const lineNumbersRef = useRef<HTMLPreElement | null>(null);
   const highlightRef = useRef<HTMLPreElement | null>(null);
   const languagePickerRef = useRef<HTMLDivElement | null>(null);
+  const encodingPickerRef = useRef<HTMLDivElement | null>(null);
+  const lineEndingPickerRef = useRef<HTMLDivElement | null>(null);
   const hasUnsavedTabsRef = useRef(false);
+  const startupFilesLoadedRef = useRef(false);
+  const externalChangeNotifiedRef = useRef(new Set<string>());
+  const searchRunRef = useRef(0);
 
   const activeTab = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
-  const isDirty = activeTab.content !== activeTab.savedContent;
-  const matches = useMemo(() => findMatches(activeTab.content, query), [activeTab.content, query]);
-  const hasUnsavedTabs = tabs.some((tab) => tab.content !== tab.savedContent);
+  const isDirty = isTabDirty(activeTab);
+  const hasUnsavedTabs = tabs.some(isTabDirty);
   const languageOptions = useMemo(() => [...builtInLanguages, ...customLanguages], [customLanguages]);
   const filteredLanguageOptions = useMemo(() => {
     const value = languageSearch.trim().toLowerCase();
@@ -836,6 +1205,7 @@ export default function App() {
     () => getLanguageDefinition(activeTab.language, customLanguages),
     [activeTab.language, customLanguages]
   );
+  const textMateLanguage = useMemo(() => getTextMateLanguage(activeLanguage), [activeLanguage]);
   const activeFont = useMemo(() => {
     const languageFont = languageFonts[activeTab.language];
     return {
@@ -877,6 +1247,49 @@ export default function App() {
     setStatus("新建文档");
   }, []);
 
+  const openFilesFromPayloads = useCallback((files: FilePayload[]) => {
+    if (!files.length) {
+      return;
+    }
+
+    const nextTabs = files.map((file) => createTabFromFile(file, customLanguages));
+    setTabs((current) => {
+      const existingPaths = new Set(current.map((tab) => tab.path).filter(Boolean));
+      const uniqueTabs = nextTabs.filter((tab) => !existingPaths.has(tab.path));
+      if (!uniqueTabs.length) {
+        const existing = current.find((tab) => tab.path === files[0].path);
+        if (existing) {
+          setActiveId(existing.id);
+          setStatus(`宸插垏鎹㈠埌 ${existing.name}`);
+        }
+        return current;
+      }
+
+      const onlyBlank =
+        current.length === 1 &&
+        current[0].path === null &&
+        current[0].content.length === 0 &&
+        current[0].savedContent.length === 0;
+      setActiveId(uniqueTabs[0].id);
+      setStatus(uniqueTabs.length === 1 ? `宸叉墦寮€ ${uniqueTabs[0].name}` : `Opened ${uniqueTabs.length} files`);
+      return onlyBlank ? uniqueTabs : [...current, ...uniqueTabs];
+    });
+  }, [customLanguages]);
+
+  const openFilesByPath = useCallback(async (paths: string[]) => {
+    const uniquePaths = Array.from(new Set(paths)).filter(Boolean);
+    if (!uniquePaths.length) {
+      return;
+    }
+
+    try {
+      const files = await invoke<FilePayload[]>("open_files_by_path", { paths: uniquePaths });
+      openFilesFromPayloads(files);
+    } catch (error) {
+      setStatus(`Open failed: ${String(error)}`);
+    }
+  }, [openFilesFromPayloads]);
+
   const openFile = useCallback(async () => {
     try {
       const file = await invoke<FilePayload | null>("open_file_dialog");
@@ -898,6 +1311,11 @@ export default function App() {
         path: file.path,
         content: file.content,
         savedContent: file.content,
+        encoding: file.encoding,
+        savedEncoding: file.encoding,
+        lineEnding: file.line_ending,
+        savedLineEnding: file.line_ending,
+        ...fileStateFromPayload(file),
         language: detectLanguage(file.name, customLanguages),
         history: []
       };
@@ -920,7 +1338,9 @@ export default function App() {
     try {
       const file = await invoke<FilePayload | null>("save_file_dialog", {
         defaultPath: activeTab.path ?? activeTab.name,
-        content: activeTab.content
+        content: activeTab.content,
+        encoding: activeTab.encoding,
+        lineEnding: activeTab.lineEnding
       });
       if (!file) {
         setStatus("已取消保存");
@@ -931,6 +1351,11 @@ export default function App() {
         path: file.path,
         content: file.content,
         savedContent: file.content,
+        encoding: file.encoding,
+        savedEncoding: file.encoding,
+        lineEnding: file.line_ending,
+        savedLineEnding: file.line_ending,
+        ...fileStateFromPayload(file),
         language: detectLanguage(file.name, customLanguages),
         history: []
       });
@@ -948,11 +1373,30 @@ export default function App() {
     }
 
     try {
-      await invoke("write_file", {
+      const state = await invoke<FileState | null>("get_file_state", { path: activeTab.path });
+      if (hasFileStateChanged(activeTab, state)) {
+        const shouldOverwrite = window.confirm(`"${activeTab.name}" has changed on disk. Overwrite it with the current editor content?`);
+        if (!shouldOverwrite) {
+          setStatus("Save canceled");
+          return false;
+        }
+      }
+
+      const file = await invoke<FilePayload>("write_file", {
         path: activeTab.path,
-        content: activeTab.content
+        content: activeTab.content,
+        encoding: activeTab.encoding,
+        lineEnding: activeTab.lineEnding
       });
-      updateActiveTab({ savedContent: activeTab.content });
+      updateActiveTab({
+        content: file.content,
+        savedContent: file.content,
+        encoding: file.encoding,
+        savedEncoding: file.encoding,
+        lineEnding: file.line_ending,
+        savedLineEnding: file.line_ending,
+        ...fileStateFromPayload(file)
+      });
       setStatus(`已保存 ${activeTab.name}`);
       return true;
     } catch (error) {
@@ -961,10 +1405,115 @@ export default function App() {
     }
   }, [activeTab, saveAs, updateActiveTab]);
 
+  const reopenWithEncoding = useCallback(async (encoding: string) => {
+    if (!activeTab.path) {
+      setStatus("Current tab has no file path");
+      return;
+    }
+
+    if (isTabDirty(activeTab)) {
+      const shouldReopen = window.confirm(`"${activeTab.name}" has unsaved changes. Reopen from disk anyway?`);
+      if (!shouldReopen) {
+        return;
+      }
+    }
+
+    try {
+      const file = await invoke<FilePayload>("open_file_with_encoding", {
+        path: activeTab.path,
+        encoding
+      });
+      updateActiveTab({
+        content: file.content,
+        savedContent: file.content,
+        encoding: file.encoding,
+        savedEncoding: file.encoding,
+        lineEnding: file.line_ending,
+        savedLineEnding: file.line_ending,
+        ...fileStateFromPayload(file),
+        history: []
+      });
+      setStatus(`Reopened ${activeTab.name} as ${file.encoding}`);
+    } catch (error) {
+      setStatus(`Reopen failed: ${String(error)}`);
+    }
+  }, [activeTab, updateActiveTab]);
+
+  const saveWithEncoding = useCallback(async (encoding: string) => {
+    updateActiveTab({ encoding });
+    const targetTab = { ...activeTab, encoding };
+    if (!targetTab.path) {
+      try {
+        const file = await invoke<FilePayload | null>("save_file_dialog", {
+          defaultPath: targetTab.name,
+          content: targetTab.content,
+          encoding: targetTab.encoding,
+          lineEnding: targetTab.lineEnding
+        });
+        if (!file) {
+          setStatus("Save canceled");
+          return;
+        }
+        updateActiveTab({
+          name: file.name,
+          path: file.path,
+          content: file.content,
+          savedContent: file.content,
+          encoding: file.encoding,
+          savedEncoding: file.encoding,
+          lineEnding: file.line_ending,
+          savedLineEnding: file.line_ending,
+          ...fileStateFromPayload(file),
+          language: detectLanguage(file.name, customLanguages),
+          history: []
+        });
+        setStatus(`Saved ${file.name} as ${file.encoding}`);
+      } catch (error) {
+        setStatus(`Save failed: ${String(error)}`);
+      }
+      return;
+    }
+
+    try {
+      const state = await invoke<FileState | null>("get_file_state", { path: targetTab.path });
+      if (hasFileStateChanged(targetTab, state)) {
+        const shouldOverwrite = window.confirm(`"${targetTab.name}" has changed on disk. Overwrite it with the current editor content?`);
+        if (!shouldOverwrite) {
+          setStatus("Save canceled");
+          return;
+        }
+      }
+
+      const file = await invoke<FilePayload>("write_file", {
+        path: targetTab.path,
+        content: targetTab.content,
+        encoding: targetTab.encoding,
+        lineEnding: targetTab.lineEnding
+      });
+      updateActiveTab({
+        content: file.content,
+        savedContent: file.content,
+        encoding: file.encoding,
+        savedEncoding: file.encoding,
+        lineEnding: file.line_ending,
+        savedLineEnding: file.line_ending,
+        ...fileStateFromPayload(file)
+      });
+      setStatus(`Saved ${targetTab.name} as ${file.encoding}`);
+    } catch (error) {
+      setStatus(`Save failed: ${String(error)}`);
+    }
+  }, [activeTab, customLanguages, updateActiveTab]);
+
+  const switchLineEnding = useCallback((lineEnding: LineEnding) => {
+    updateActiveTab({ lineEnding });
+    setStatus(`Line endings set to ${lineEnding}`);
+  }, [updateActiveTab]);
+
   const closeTab = useCallback((id: string) => {
     setTabs((current) => {
       const closing = current.find((tab) => tab.id === id);
-      if (closing && closing.content !== closing.savedContent) {
+      if (closing && isTabDirty(closing)) {
         const shouldClose = window.confirm(`"${closing.name}" 尚未保存，确定关闭吗？`);
         if (!shouldClose) {
           return current;
@@ -1049,6 +1598,11 @@ export default function App() {
         path: file.path,
         content: file.content,
         savedContent: file.content,
+        encoding: file.encoding,
+        savedEncoding: file.encoding,
+        lineEnding: file.line_ending,
+        savedLineEnding: file.line_ending,
+        ...fileStateFromPayload(file),
         language: detectLanguage(file.name, customLanguages),
         history: []
       };
@@ -1171,6 +1725,70 @@ export default function App() {
     setStatus(`${activeLanguage.name} 未配置注释符`);
   }, [activeLanguage, activeTab.content, updateActiveContent]);
 
+  const lineStarts = useMemo(() => buildLineStarts(activeTab.content), [activeTab.content]);
+
+  useEffect(() => {
+    const runId = searchRunRef.current + 1;
+    searchRunRef.current = runId;
+    setCurrentMatchIndex(-1);
+
+    if (!query) {
+      setMatches([]);
+      setIsSearching(false);
+      setSearchError("");
+      return;
+    }
+
+    try {
+      if (searchOptions.regex || searchOptions.wholeWord) {
+        createSearchRegex(query, searchOptions);
+      }
+    } catch (error) {
+      setMatches([]);
+      setIsSearching(false);
+      setSearchError(String(error));
+      return;
+    }
+
+    let timer = 0;
+    let position = 0;
+    const collected: SearchMatch[] = [];
+    const chunkSize = 256 * 1024;
+    const overlap = searchOptions.regex ? 1024 : Math.max(0, query.length - 1);
+
+    setMatches([]);
+    setSearchError("");
+    setIsSearching(true);
+
+    const scanChunk = () => {
+      if (searchRunRef.current !== runId) {
+        return;
+      }
+
+      const started = performance.now();
+      while (position < activeTab.content.length && performance.now() - started < 12) {
+        const start = position;
+        const end = Math.min(activeTab.content.length, start + chunkSize);
+        const scanEnd = Math.min(activeTab.content.length, end + overlap);
+        const chunkMatches = findMatchesInRange(activeTab.content, query, searchOptions, start, scanEnd)
+          .filter((match) => match.start >= start && match.start < end);
+        collected.push(...chunkMatches);
+        position = end;
+      }
+
+      setMatches([...collected]);
+      if (position < activeTab.content.length) {
+        timer = window.setTimeout(scanChunk, 0);
+        return;
+      }
+
+      setIsSearching(false);
+    };
+
+    timer = window.setTimeout(scanChunk, 0);
+    return () => window.clearTimeout(timer);
+  }, [activeTab.content, query, searchOptions]);
+
   const selectMatch = useCallback((index: number) => {
     const match = matches[index];
     if (!match) {
@@ -1191,6 +1809,10 @@ export default function App() {
     }
 
     if (!matches.length) {
+      if (isSearching) {
+        setStatus("Searching...");
+        return;
+      }
       setStatus("没有匹配结果");
       return;
     }
@@ -1201,7 +1823,7 @@ export default function App() {
         ? (currentMatchIndex + 1) % matches.length
         : matches.findIndex((match) => match.start >= selectionEnd);
     selectMatch(nextIndex === -1 ? 0 : nextIndex);
-  }, [currentMatchIndex, cursor, matches, query, selectMatch]);
+  }, [currentMatchIndex, cursor, isSearching, matches, query, selectMatch]);
 
   const findPrevious = useCallback(() => {
     if (!query) {
@@ -1210,6 +1832,10 @@ export default function App() {
     }
 
     if (!matches.length) {
+      if (isSearching) {
+        setStatus("Searching...");
+        return;
+      }
       setStatus("没有匹配结果");
       return;
     }
@@ -1220,11 +1846,16 @@ export default function App() {
         ? (currentMatchIndex - 1 + matches.length) % matches.length
         : findPreviousMatchIndex(matches, selectionStart);
     selectMatch(previousIndex === -1 ? matches.length - 1 : previousIndex);
-  }, [currentMatchIndex, cursor, matches, query, selectMatch]);
+  }, [currentMatchIndex, cursor, isSearching, matches, query, selectMatch]);
 
   const replaceMatches = useCallback(() => {
     if (!query) {
       editorRef.current?.focus();
+      return;
+    }
+
+    if (isSearching) {
+      setStatus("Search is still running");
       return;
     }
 
@@ -1266,11 +1897,11 @@ export default function App() {
       editor?.setSelectionRange(nextCursor, nextCursor);
     });
     setStatus(`已替换 ${scopedMatches.length} 处`);
-  }, [activeTab.content, matches, query, replaceScope, replaceText, updateActiveContent]);
+  }, [activeTab.content, isSearching, matches, query, replaceScope, replaceText, updateActiveContent]);
 
   const jumpToLine = useCallback(() => {
-    const totalLines = activeTab.content.length ? activeTab.content.split("\n").length : 1;
-    const currentLine = lineAndColumn(activeTab.content, cursor).line;
+    const totalLines = lineStarts.length;
+    const currentLine = lineAndColumnFromStarts(activeTab.content, cursor, lineStarts).line;
     const input = window.prompt(`跳转到行号（1-${totalLines}）`, String(currentLine));
     if (input === null) {
       editorRef.current?.focus();
@@ -1285,10 +1916,7 @@ export default function App() {
     }
 
     const targetLine = Math.min(requestedLine, totalLines);
-    const lines = activeTab.content.split("\n");
-    const targetCursor = lines
-      .slice(0, targetLine - 1)
-      .reduce((offset, line) => offset + line.length + 1, 0);
+    const targetCursor = lineStarts[targetLine - 1] ?? 0;
 
     editorRef.current?.focus();
     editorRef.current?.setSelectionRange(targetCursor, targetCursor);
@@ -1307,75 +1935,142 @@ export default function App() {
     }
     setCursor(targetCursor);
     setStatus(`已跳转到第 ${targetLine} 行`);
-  }, [activeTab.content, cursor]);
+  }, [activeTab.content, cursor, lineStarts]);
+
+  const lineHeight = useMemo(() => Number(activeFont.size) * 1.55, [activeFont.size]);
+  const editorVerticalPadding = 18;
+  const virtualOverscan = 40;
 
   const stats = useMemo(() => {
-    const lines = activeTab.content.length ? activeTab.content.split("\n").length : 1;
+    const lines = lineStarts.length;
     const words = activeTab.content.trim() ? activeTab.content.trim().split(/\s+/).length : 0;
     return {
       lines,
       words,
       chars: activeTab.content.length,
-      ...lineAndColumn(activeTab.content, cursor)
+      ...lineAndColumnFromStarts(activeTab.content, cursor, lineStarts)
     };
-  }, [activeTab.content, cursor]);
+  }, [activeTab.content, cursor, lineStarts]);
+
+  const searchResults = useMemo(() => {
+    return matches.slice(0, 1000).map((match, index) => {
+      const lineIndex = getLineIndexAtOffset(lineStarts, match.start);
+      const lineStart = lineStarts[lineIndex] ?? 0;
+      const lineEnd = lineIndex + 1 < lineStarts.length
+        ? Math.max(lineStart, lineStarts[lineIndex + 1] - 1)
+        : activeTab.content.length;
+      const lineText = activeTab.content.slice(lineStart, lineEnd).trim() || "(empty line)";
+      return {
+        index,
+        line: lineIndex + 1,
+        column: match.start - lineStart + 1,
+        text: lineText.length > 180 ? `${lineText.slice(0, 180)}...` : lineText
+      };
+    });
+  }, [activeTab.content, lineStarts, matches]);
+
+  const virtualWindow = useMemo(() => {
+    const visibleStart = Math.max(0, Math.floor((editorViewport.scrollTop - editorVerticalPadding) / lineHeight));
+    const visibleCount = Math.max(1, Math.ceil((editorViewport.height || 1) / lineHeight));
+    const startLine = Math.max(0, visibleStart - virtualOverscan);
+    const endLine = Math.min(stats.lines, visibleStart + visibleCount + virtualOverscan);
+    const startOffset = lineStarts[startLine] ?? 0;
+    const endOffset = endLine >= stats.lines
+      ? activeTab.content.length
+      : Math.max(0, (lineStarts[endLine] ?? activeTab.content.length) - 1);
+    return {
+      startLine,
+      endLine,
+      startOffset,
+      endOffset,
+      top: startLine * lineHeight
+    };
+  }, [activeTab.content.length, editorViewport.height, editorViewport.scrollTop, lineHeight, lineStarts, stats.lines]);
 
   const lineNumbers = useMemo(() => {
-    return Array.from({ length: stats.lines }, (_, index) => index + 1).join("\n");
-  }, [stats.lines]);
+    return Array.from(
+      { length: Math.max(0, virtualWindow.endLine - virtualWindow.startLine) },
+      (_, index) => virtualWindow.startLine + index + 1
+    ).join("\n");
+  }, [virtualWindow.endLine, virtualWindow.startLine]);
+  const virtualContentHeight = stats.lines * lineHeight;
+
+  const renderHighlightedSyntax = useCallback((content: string) => {
+    if (
+      textMateHighlighter &&
+      textMateLanguage &&
+      (textMateLanguage === "text" || textMateHighlighter.getLoadedLanguages().includes(textMateLanguage))
+    ) {
+      try {
+        return renderTextMateTokens(textMateHighlighter, content, textMateLanguage);
+      } catch {
+        // Fall through to the legacy scanner if a grammar fails on an edge case.
+      }
+    }
+
+    return highlightSyntax(content, activeLanguage);
+  }, [activeLanguage, textMateHighlighter, textMateLanguage, textMateLoadVersion]);
 
   const highlightedContent = useMemo(() => {
-    const wordMatches = wordHighlight ? findWholeWordMatches(activeTab.content, wordHighlight) : [];
+    const visibleContent = activeTab.content.slice(virtualWindow.startOffset, virtualWindow.endOffset);
+    const wordMatches = wordHighlight ? findWholeWordMatches(visibleContent, wordHighlight).map((match) => ({
+      start: match.start + virtualWindow.startOffset,
+      end: match.end + virtualWindow.startOffset
+    })) : [];
     const ranges: HighlightRange[] = [
       ...wordMatches.map((match) => ({ ...match, kind: "word" as const })),
-      ...matches.map((match, index) => ({
-        ...match,
-        kind: "search" as const,
-        current: index === currentMatchIndex
-      }))
+      ...matches
+        .map((match, index) => ({
+          ...match,
+          kind: "search" as const,
+          current: index === currentMatchIndex
+        }))
+        .filter((match) => match.end > virtualWindow.startOffset && match.start < virtualWindow.endOffset)
     ].sort((first, second) => first.start - second.start || second.end - first.end);
 
     if (!ranges.length) {
-      return highlightSyntax(activeTab.content, activeLanguage);
+      return renderHighlightedSyntax(visibleContent);
     }
 
     const nodes: ReactNode[] = [];
-    let position = 0;
+    let position = virtualWindow.startOffset;
     ranges.forEach((range, index) => {
-      if (range.start < position) {
+      const start = Math.max(range.start, virtualWindow.startOffset);
+      const end = Math.min(range.end, virtualWindow.endOffset);
+      if (start < position || end <= start) {
         return;
       }
 
-      if (range.start > position) {
+      if (start > position) {
         nodes.push(
-          <span key={`text-${position}-${range.start}`}>
-            {highlightSyntax(activeTab.content.slice(position, range.start), activeLanguage)}
+          <span key={`text-${position}-${start}`}>
+            {renderHighlightedSyntax(activeTab.content.slice(position, start))}
           </span>
         );
       }
       nodes.push(
         <mark
-          key={`${range.kind}-${range.start}-${range.end}-${index}`}
+          key={`${range.kind}-${start}-${end}-${index}`}
           className={[
             range.kind === "word" ? "is-word" : "",
             range.current ? "is-current" : ""
           ].filter(Boolean).join(" ") || undefined}
         >
-          {highlightSyntax(activeTab.content.slice(range.start, range.end), activeLanguage)}
+          {renderHighlightedSyntax(activeTab.content.slice(start, end))}
         </mark>
       );
-      position = range.end;
+      position = end;
     });
-    if (position < activeTab.content.length) {
+    if (position < virtualWindow.endOffset) {
       nodes.push(
         <span key={`text-${position}-end`}>
-          {highlightSyntax(activeTab.content.slice(position), activeLanguage)}
+          {renderHighlightedSyntax(activeTab.content.slice(position, virtualWindow.endOffset))}
         </span>
       );
     }
 
     return nodes;
-  }, [activeLanguage, activeTab.content, currentMatchIndex, matches, wordHighlight]);
+  }, [activeTab.content, currentMatchIndex, matches, renderHighlightedSyntax, virtualWindow.endOffset, virtualWindow.startOffset, wordHighlight]);
 
   const onEditorKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Tab") {
@@ -1460,11 +2155,145 @@ export default function App() {
   }, [activeId, tabs]);
 
   useEffect(() => {
-    void reloadCustomLanguages();
+    const timer = window.setTimeout(() => {
+      void reloadCustomLanguages();
+    }, 120);
+    return () => window.clearTimeout(timer);
   }, [reloadCustomLanguages]);
 
   useEffect(() => {
-    if (!isLanguagePickerOpen) {
+    let canceled = false;
+    void createHighlighter({
+      themes: [textMateTheme as never],
+      langs: []
+    }).then((highlighter) => {
+      if (!canceled) {
+        setTextMateHighlighter(highlighter);
+      }
+    }).catch((error) => {
+      setStatus(`TextMate highlighter failed: ${String(error)}`);
+    });
+
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!textMateHighlighter || !textMateLanguage || textMateLanguage === "text") {
+      return;
+    }
+
+    if (textMateHighlighter.getLoadedLanguages().includes(textMateLanguage)) {
+      return;
+    }
+
+    let canceled = false;
+    void textMateHighlighter.loadLanguage(textMateLanguage as never).then(() => {
+      if (!canceled) {
+        setTextMateLoadVersion((value) => value + 1);
+      }
+    }).catch(() => {
+      // Unsupported or failed grammars fall back to the legacy scanner.
+    });
+
+    return () => {
+      canceled = true;
+    };
+  }, [textMateHighlighter, textMateLanguage]);
+
+  useEffect(() => {
+    if (startupFilesLoadedRef.current) {
+      return;
+    }
+
+    startupFilesLoadedRef.current = true;
+    const timer = window.setTimeout(async () => {
+      try {
+        const files = await invoke<FilePayload[]>("get_startup_files");
+        openFilesFromPayloads(files);
+      } catch (error) {
+        setStatus(`Startup file open failed: ${String(error)}`);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [openFilesFromPayloads]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void getCurrentWebview().onDragDropEvent((event) => {
+      if (event.payload.type === "drop") {
+        void openFilesByPath(event.payload.paths);
+      }
+    }).then((value) => {
+      unlisten = value;
+    });
+
+    return () => unlisten?.();
+  }, [openFilesByPath]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<string[]>("open-files", (event) => {
+      void openFilesByPath(event.payload);
+    }).then((value) => {
+      unlisten = value;
+    });
+
+    return () => unlisten?.();
+  }, [openFilesByPath]);
+
+  useEffect(() => {
+    if (!activeTab.path) {
+      return;
+    }
+
+    const checkExternalChange = async () => {
+      try {
+        const state = await invoke<FileState | null>("get_file_state", { path: activeTab.path });
+        const key = `${activeTab.path}:${activeTab.diskModifiedMs ?? "missing"}:${activeTab.diskSize ?? "missing"}`;
+        if (hasFileStateChanged(activeTab, state)) {
+          if (!externalChangeNotifiedRef.current.has(key)) {
+            externalChangeNotifiedRef.current.add(key);
+            setStatus(`"${activeTab.name}" changed on disk`);
+          }
+        } else {
+          externalChangeNotifiedRef.current.delete(key);
+        }
+      } catch {
+        // Save-time checks still handle actionable errors; keep background polling quiet.
+      }
+    };
+
+    const timer = window.setInterval(checkExternalChange, 4000);
+    void checkExternalChange();
+    return () => window.clearInterval(timer);
+  }, [activeTab.diskModifiedMs, activeTab.diskSize, activeTab.name, activeTab.path]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) {
+      return;
+    }
+
+    const updateViewport = () => {
+      setEditorViewport((current) => {
+        const next = {
+          scrollTop: editor.scrollTop,
+          height: editor.clientHeight
+        };
+        return current.scrollTop === next.scrollTop && current.height === next.height ? current : next;
+      });
+    };
+
+    updateViewport();
+    const observer = new ResizeObserver(updateViewport);
+    observer.observe(editor);
+    return () => observer.disconnect();
+  }, [activeId]);
+
+  useEffect(() => {
+    if (!isLanguagePickerOpen && !isEncodingPickerOpen && !isLineEndingPickerOpen) {
       return;
     }
 
@@ -1473,14 +2302,22 @@ export default function App() {
       if (target instanceof Node && languagePickerRef.current?.contains(target)) {
         return;
       }
+      if (target instanceof Node && encodingPickerRef.current?.contains(target)) {
+        return;
+      }
+      if (target instanceof Node && lineEndingPickerRef.current?.contains(target)) {
+        return;
+      }
 
       setIsLanguagePickerOpen(false);
+      setIsEncodingPickerOpen(false);
+      setIsLineEndingPickerOpen(false);
       setLanguageSearch("");
     };
 
     window.addEventListener("pointerdown", onPointerDown);
     return () => window.removeEventListener("pointerdown", onPointerDown);
-  }, [isLanguagePickerOpen]);
+  }, [isEncodingPickerOpen, isLanguagePickerOpen, isLineEndingPickerOpen]);
 
   useEffect(() => {
     const appWindow = getCurrentWindow();
@@ -1550,10 +2387,38 @@ export default function App() {
             }}
             placeholder="查找"
           />
-          <button title="上一个匹配" onClick={findPrevious} disabled={!matches.length}>
+          <button
+            className={searchOptions.caseSensitive ? "search-option is-active" : "search-option"}
+            title="Match case"
+            onClick={() => setSearchOptions((current) => ({ ...current, caseSensitive: !current.caseSensitive }))}
+          >
+            Aa
+          </button>
+          <button
+            className={searchOptions.regex ? "search-option is-active" : "search-option"}
+            title="Use regular expression"
+            onClick={() => setSearchOptions((current) => ({ ...current, regex: !current.regex }))}
+          >
+            .*
+          </button>
+          <button
+            className={searchOptions.wholeWord ? "search-option is-active" : "search-option"}
+            title="Match whole word"
+            onClick={() => setSearchOptions((current) => ({ ...current, wholeWord: !current.wholeWord }))}
+          >
+            W
+          </button>
+          <button
+            className={isSearchResultsOpen ? "search-option is-active" : "search-option"}
+            title="Search results"
+            onClick={() => setIsSearchResultsOpen((value) => !value)}
+          >
+            <List size={14} />
+          </button>
+          <button title="上一个匹配" onClick={findPrevious} disabled={!matches.length || Boolean(searchError)}>
             <ChevronUp size={15} />
           </button>
-          <button title="下一个匹配" onClick={findNext} disabled={!matches.length}>
+          <button title="下一个匹配" onClick={findNext} disabled={!matches.length || Boolean(searchError)}>
             <ChevronDown size={15} />
           </button>
         </div>
@@ -1578,7 +2443,7 @@ export default function App() {
             <option value="all">全局</option>
             <option value="selection">选中行</option>
           </select>
-          <button title="执行替换" onClick={replaceMatches} disabled={!query || !matches.length}>
+          <button title="执行替换" onClick={replaceMatches} disabled={!query || !matches.length || isSearching || Boolean(searchError)}>
             替换
           </button>
         </div>
@@ -1598,9 +2463,17 @@ export default function App() {
         </button>
       </header>
 
-      <nav className="tabstrip" aria-label="打开的文档">
+      <nav
+        className="tabstrip"
+        aria-label="打开的文档"
+        onDoubleClick={(event) => {
+          if (event.target === event.currentTarget) {
+            addNewTab();
+          }
+        }}
+      >
         {tabs.map((tab) => {
-          const dirty = tab.content !== tab.savedContent;
+          const dirty = isTabDirty(tab);
           return (
             <button
               key={tab.id}
@@ -1627,14 +2500,30 @@ export default function App() {
       </nav>
 
       <section className="editor-wrap" style={editorFontStyle}>
-          <pre ref={lineNumbersRef} className="line-numbers" aria-hidden="true">{lineNumbers}</pre>
+          <pre ref={lineNumbersRef} className="line-numbers" aria-hidden="true">
+            <span className="virtual-scroll-space" style={{ height: virtualContentHeight }}>
+              <span
+                className="virtual-line-number-content"
+                style={{ transform: `translateY(${virtualWindow.top}px)` }}
+              >
+                {lineNumbers}
+              </span>
+            </span>
+          </pre>
           <div className="editor-pane" ref={editorPaneRef}>
             <pre
               ref={highlightRef}
               className={wordWrap ? "highlight-layer" : "highlight-layer no-wrap"}
               aria-hidden="true"
             >
-              {highlightedContent}
+              <span className="virtual-scroll-space" style={{ height: virtualContentHeight }}>
+                <span
+                  className="virtual-highlight-content"
+                  style={{ transform: `translateY(${virtualWindow.top}px)` }}
+                >
+                  {highlightedContent}
+                </span>
+              </span>
             </pre>
             <textarea
               ref={editorRef}
@@ -1674,6 +2563,15 @@ export default function App() {
               onKeyUp={(event) => setCursor(event.currentTarget.selectionStart)}
               onMouseUp={(event) => setCursor(event.currentTarget.selectionStart)}
               onScroll={(event) => {
+                const nextViewport = {
+                  scrollTop: event.currentTarget.scrollTop,
+                  height: event.currentTarget.clientHeight
+                };
+                setEditorViewport((current) =>
+                  current.scrollTop === nextViewport.scrollTop && current.height === nextViewport.height
+                    ? current
+                    : nextViewport
+                );
                 if (lineNumbersRef.current) {
                   lineNumbersRef.current.scrollTop = event.currentTarget.scrollTop;
                 }
@@ -1686,6 +2584,44 @@ export default function App() {
             />
           </div>
       </section>
+
+      {isSearchResultsOpen ? (
+        <aside className="search-results-panel" aria-label="Search results">
+          <div className="search-results-header">
+            <strong>Search Results</strong>
+            <small>
+              {searchError
+                ? "Invalid pattern"
+                : isSearching
+                  ? `Searching... ${matches.length}`
+                  : `${matches.length} matches`}
+            </small>
+          </div>
+          {searchError ? (
+            <p className="search-results-empty">{searchError}</p>
+          ) : searchResults.length > 0 ? (
+            <div className="search-results-list">
+              {searchResults.map((result) => (
+                <button
+                  key={`${result.index}-${result.line}-${result.column}`}
+                  className={result.index === currentMatchIndex ? "is-active" : undefined}
+                  onClick={() => selectMatch(result.index)}
+                >
+                  <span>
+                    Line {result.line}, Col {result.column}
+                  </span>
+                  <small>{result.text}</small>
+                </button>
+              ))}
+              {matches.length > searchResults.length ? (
+                <p className="search-results-empty">Showing first {searchResults.length} results</p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="search-results-empty">{query ? "No results" : "Enter a search term"}</p>
+          )}
+        </aside>
+      ) : null}
 
       {isSettingsOpen ? (
         <div className="settings-overlay" onPointerDown={() => setIsSettingsOpen(false)}>
@@ -1857,11 +2793,67 @@ export default function App() {
 
       <footer className="statusbar">
         <span>{status}</span>
-        <span>{query ? `匹配 ${matches.length}${currentMatchIndex >= 0 ? ` (${currentMatchIndex + 1}/${matches.length})` : ""}` : "匹配 0"}</span>
+        <span>
+          {searchError
+            ? "搜索表达式无效"
+            : query
+              ? `${isSearching ? "搜索中 " : ""}匹配 ${matches.length}${currentMatchIndex >= 0 ? ` (${currentMatchIndex + 1}/${matches.length})` : ""}`
+              : "匹配 0"}
+        </span>
+        <div className="status-language status-encoding" ref={encodingPickerRef}>
+          <button
+            onClick={() => {
+              setIsEncodingPickerOpen((value) => !value);
+              setIsLanguagePickerOpen(false);
+              setIsLineEndingPickerOpen(false);
+            }}
+          >
+            {activeTab.encoding}
+          </button>
+          {isEncodingPickerOpen ? (
+            <div className="language-picker encoding-picker" role="listbox">
+              <div className="encoding-mode">
+                <button
+                  className={encodingAction === "reopen" ? "is-active" : undefined}
+                  onClick={() => setEncodingAction("reopen")}
+                >
+                  Reopen
+                </button>
+                <button
+                  className={encodingAction === "save" ? "is-active" : undefined}
+                  onClick={() => setEncodingAction("save")}
+                >
+                  Save
+                </button>
+              </div>
+              <div className="language-picker-list">
+                {encodingOptions.map((encoding) => (
+                  <button
+                    key={encoding}
+                    className={encoding === activeTab.encoding ? "is-active" : undefined}
+                    onClick={() => {
+                      if (encodingAction === "reopen") {
+                        void reopenWithEncoding(encoding);
+                      } else {
+                        void saveWithEncoding(encoding);
+                      }
+                      setIsEncodingPickerOpen(false);
+                    }}
+                  >
+                    <span>{encoding}</span>
+                    <small>{encodingAction === "reopen" ? "Reopen from disk with this encoding" : "Save file with this encoding"}</small>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
         <div className="status-language" ref={languagePickerRef}>
           <button
             onClick={() => {
               setIsLanguagePickerOpen((value) => !value);
+              setIsEncodingPickerOpen(false);
+              setIsLineEndingPickerOpen(false);
               setLanguageSearch("");
             }}
           >
@@ -1902,6 +2894,36 @@ export default function App() {
         <span>{stats.lines} 行</span>
         <span>{stats.words} 词</span>
         <span>{stats.chars} 字符</span>
+        <div className="status-language status-line-ending" ref={lineEndingPickerRef}>
+          <button
+            onClick={() => {
+              setIsLineEndingPickerOpen((value) => !value);
+              setIsEncodingPickerOpen(false);
+              setIsLanguagePickerOpen(false);
+            }}
+          >
+            {activeTab.lineEnding}
+          </button>
+          {isLineEndingPickerOpen ? (
+            <div className="language-picker line-ending-picker" role="listbox">
+              <div className="language-picker-list">
+                {lineEndingOptions.map((lineEnding) => (
+                  <button
+                    key={lineEnding.value}
+                    className={lineEnding.value === activeTab.lineEnding ? "is-active" : undefined}
+                    onClick={() => {
+                      switchLineEnding(lineEnding.value);
+                      setIsLineEndingPickerOpen(false);
+                    }}
+                  >
+                    <span>{lineEnding.label}</span>
+                    <small>{lineEnding.detail}</small>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
       </footer>
     </main>
   );

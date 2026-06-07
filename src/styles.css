@@ -32,6 +32,7 @@ button {
 }
 
 .app-shell {
+  position: relative;
   display: grid;
   grid-template-rows: 52px 38px minmax(0, 1fr) 28px;
   width: 100%;
@@ -42,7 +43,7 @@ button {
 
 .topbar {
   display: grid;
-  grid-template-columns: auto auto minmax(180px, 320px) minmax(260px, 430px) 36px 36px;
+  grid-template-columns: auto auto minmax(300px, 500px) minmax(220px, 360px) 36px 36px;
   align-items: center;
   gap: 10px;
   padding: 7px 12px;
@@ -449,7 +450,7 @@ button {
 .searchbar,
 .replacebar {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) 28px 28px;
+  grid-template-columns: 18px minmax(0, 1fr) repeat(6, 28px);
   align-items: center;
   gap: 4px;
   height: 32px;
@@ -499,6 +500,17 @@ button {
 .searchbar button {
   width: 24px;
   padding: 0;
+}
+
+.searchbar button.search-option {
+  width: 28px;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.searchbar button.search-option.is-active {
+  background: #dfe7ee;
+  color: #1d2329;
 }
 
 .searchbar button:hover,
@@ -626,6 +638,30 @@ button {
   color: #1e242a;
 }
 
+.virtual-scroll-space {
+  position: relative;
+  display: block;
+  min-width: max-content;
+}
+
+.virtual-highlight-content,
+.virtual-line-number-content {
+  position: absolute;
+  top: 0;
+  display: block;
+  white-space: inherit;
+  will-change: transform;
+}
+
+.virtual-highlight-content {
+  left: 0;
+  right: 0;
+}
+
+.virtual-line-number-content {
+  right: 0;
+}
+
 .highlight-layer.no-wrap {
   white-space: pre;
   word-break: normal;
@@ -659,6 +695,85 @@ button {
 .editor-pane textarea::selection {
   background: #cfe0ff;
   color: #1e242a;
+}
+
+.search-results-panel {
+  position: absolute;
+  top: 98px;
+  right: 14px;
+  bottom: 42px;
+  z-index: 4;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(420px, 42vw);
+  min-width: 280px;
+  border: 1px solid #cfd7df;
+  border-radius: 7px;
+  background: #ffffff;
+  box-shadow: 0 14px 34px rgb(30 36 42 / 20%);
+  overflow: hidden;
+}
+
+.search-results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e3e8ed;
+  color: #202428;
+  font-size: 13px;
+}
+
+.search-results-header small {
+  color: #7d8790;
+  font-size: 12px;
+}
+
+.search-results-list {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  min-height: 0;
+  padding: 6px;
+  overflow: auto;
+}
+
+.search-results-list button {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 5px;
+  background: transparent;
+  color: #202428;
+  text-align: left;
+  cursor: default;
+}
+
+.search-results-list button:hover,
+.search-results-list button.is-active {
+  background: #e9edf1;
+}
+
+.search-results-list span {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.search-results-list small {
+  overflow: hidden;
+  color: #65717c;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-results-empty {
+  margin: 0;
+  padding: 12px;
+  color: #7d8790;
+  font-size: 12px;
 }
 
 .tok-keyword {
@@ -763,6 +878,35 @@ button {
   background: #ffffff;
   color: #202428;
   font-size: 12px;
+}
+
+.encoding-picker {
+  width: min(320px, 86vw);
+}
+
+.line-ending-picker {
+  width: min(180px, 70vw);
+}
+
+.encoding-mode {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.encoding-mode button {
+  height: 28px;
+  border-radius: 5px;
+  background: #f1f4f6;
+  color: #52606b;
+  font-size: 12px;
+  cursor: default;
+}
+
+.encoding-mode button:hover,
+.encoding-mode button.is-active {
+  background: #dfe7ee;
+  color: #202428;
 }
 
 .language-picker-list {
