@@ -2,6 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { basicSetup } from "codemirror";
+import { indentWithTab } from "@codemirror/commands";
+import { EditorState, RangeSetBuilder, StateField, Compartment, Prec } from "@codemirror/state";
+import { EditorView, Decoration, DecorationSet, keymap } from "@codemirror/view";
 import { createHighlighter } from "shiki";
 import {
   ChevronDown,
@@ -17,7 +21,7 @@ import {
   X,
   WrapText
 } from "lucide-react";
-import { CSSProperties, KeyboardEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, KeyboardEvent, ReactNode, WheelEvent, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 
 type FilePayload = {
   path: string;
@@ -76,6 +80,29 @@ type HighlightRange = SearchMatch & {
   current?: boolean;
 };
 
+type CodeMirrorEditorHandle = {
+  focus: () => void;
+  setSelectionRange: (start: number, end: number) => void;
+  getSelectionRange: () => { start: number; end: number };
+  scrollToOffset: (offset: number) => void;
+};
+
+type CodeMirrorEditorProps = {
+  content: string;
+  wordWrap: boolean;
+  matches: SearchMatch[];
+  currentMatchIndex: number;
+  wordHighlight: string;
+  fontStyle: CSSProperties;
+  language: LanguageDefinition;
+  onChange: (content: string) => void;
+  onCursorChange: (cursor: number) => void;
+  onCurrentMatchReset: () => void;
+  onWordHighlightChange: (word: string) => void;
+  onOpenSearchWidget: (mode: "search" | "replace") => void;
+  onZoomWheel: (event: WheelEvent<HTMLDivElement>) => void;
+};
+
 type CommentTokens = {
   line?: string;
   blockStart?: string;
@@ -91,6 +118,7 @@ type LanguageDefinition = {
   regex?: string;
   keywordStyles?: Record<string, CSSProperties>;
   stringDelimiters?: string[];
+  isCustom?: boolean;
   type?: "code" | "markup" | "css" | "json" | "markdown";
 };
 
@@ -158,14 +186,32 @@ const languageFontSettingsKey = "notely.languageFontSettings";
 const startupPolicyKey = "notely.startupPolicy";
 const sessionKey = "notely.session";
 const maxStoredSessionContentLength = 1_000_000;
+const minEditorZoom = 50;
+const maxEditorZoom = 200;
+const editorZoomStep = 10;
 const fontFamilies = [
   "Cascadia Mono",
+  "Cascadia Code",
   "JetBrains Mono",
+  "Fira Code",
+  "Fira Mono",
   "Consolas",
   "Courier New",
+  "Lucida Console",
+  "Source Code Pro",
+  "Roboto Mono",
+  "Inconsolata",
+  "Menlo",
+  "Monaco",
   "Microsoft YaHei UI",
   "Microsoft YaHei",
-  "Segoe UI"
+  "Microsoft JhengHei UI",
+  "SimSun",
+  "SimHei",
+  "DengXian",
+  "Segoe UI",
+  "Arial",
+  "Tahoma"
 ];
 const fontSizes = ["12", "13", "14", "15", "16", "18", "20", "22"];
 const textMateTheme = "github-light";
@@ -528,6 +574,7 @@ function parseCustomLanguages(raw: string): LanguageDefinition[] {
           extensions,
           keywords: keywordConfig.keywords,
           keywordStyles: keywordConfig.keywordStyles,
+          isCustom: true,
           regexEnabled: language.regexEnabled ?? language.enableRegex ?? language["是否启用正则匹配"] ?? false,
           regex,
           comment: {
@@ -1136,6 +1183,398 @@ function highlightSyntax(content: string, language: LanguageDefinition): ReactNo
   return nodes;
 }
 
+function createSyntaxDecorations(content: string, language: LanguageDefinition) {
+  const builder = new RangeSetBuilder<Decoration>();
+  const keywordStyles = language.keywordStyles ?? {};
+  const isCustomLanguage = language.isCustom === true;
+  const ranges: Array<{ from: number; to: number; className: string; color?: string }> = [];
+  const addRange = (from: number, to: number, className: string, color?: string) => {
+    if (from < to) {
+      ranges.push({ from, to, className, color });
+    }
+  };
+
+  if (isCustomLanguage) {
+    if (language.keywords.length) {
+      const keywordPattern = new RegExp(`\\b(${language.keywords.map(escapeRegExp).join("|")})\\b`, "gi");
+      for (const match of content.matchAll(keywordPattern)) {
+        const color = keywordStyles[match[0].toLowerCase()]?.color;
+        if (typeof color === "string" && color.trim()) {
+          addRange(match.index ?? 0, (match.index ?? 0) + match[0].length, "tok-custom-keyword", color);
+        }
+      }
+    }
+
+    ranges
+      .sort((first, second) => first.from - second.from || first.to - second.to)
+      .forEach((range) => {
+        builder.add(
+          range.from,
+          range.to,
+          Decoration.mark({
+            class: range.className,
+            attributes: range.color ? { style: `color: ${range.color}` } : undefined
+          })
+        );
+      });
+
+    return builder.finish();
+  }
+
+  const stringPattern = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/g;
+  for (const match of content.matchAll(stringPattern)) {
+    addRange(match.index ?? 0, (match.index ?? 0) + match[0].length, "tok-string");
+  }
+
+  const numberPattern = /\b\d+(?:\.\d+)?\b/g;
+  for (const match of content.matchAll(numberPattern)) {
+    addRange(match.index ?? 0, (match.index ?? 0) + match[0].length, "tok-number");
+  }
+
+  if (language.comment.line) {
+    const escaped = escapeRegExp(language.comment.line);
+    const commentPattern = new RegExp(`${escaped}.*`, "gm");
+    for (const match of content.matchAll(commentPattern)) {
+      addRange(match.index ?? 0, (match.index ?? 0) + match[0].length, "tok-comment");
+    }
+  }
+
+  if (language.comment.blockStart && language.comment.blockEnd) {
+    const blockPattern = new RegExp(`${escapeRegExp(language.comment.blockStart)}[\\s\\S]*?${escapeRegExp(language.comment.blockEnd)}`, "g");
+    for (const match of content.matchAll(blockPattern)) {
+      addRange(match.index ?? 0, (match.index ?? 0) + match[0].length, "tok-comment");
+    }
+  }
+
+  if (language.type === "markdown") {
+    const headingPattern = /^#{1,6}[^\n]*/gm;
+    for (const match of content.matchAll(headingPattern)) {
+      addRange(match.index ?? 0, (match.index ?? 0) + match[0].length, "tok-heading");
+    }
+  }
+
+  if (language.type === "markup") {
+    const tagPattern = /<\/?[A-Za-z][\w:-]*/g;
+    for (const match of content.matchAll(tagPattern)) {
+      addRange(match.index ?? 0, (match.index ?? 0) + match[0].length, "tok-tag");
+    }
+    const attrPattern = /\s([A-Za-z_:][-A-Za-z0-9_:.]*)(?=\s*=)/g;
+    for (const match of content.matchAll(attrPattern)) {
+      const from = (match.index ?? 0) + match[0].indexOf(match[1]);
+      addRange(from, from + match[1].length, "tok-attr");
+    }
+  }
+
+  if (language.keywords.length) {
+    const keywordPattern = new RegExp(`\\b(${language.keywords.map(escapeRegExp).join("|")})\\b`, "g");
+    for (const match of content.matchAll(keywordPattern)) {
+      addRange(match.index ?? 0, (match.index ?? 0) + match[0].length, "tok-keyword");
+    }
+  }
+
+  const symbolPattern = /[{}()[\].,;:+\-*/%=!<>|&?]/g;
+  for (const match of content.matchAll(symbolPattern)) {
+    addRange(match.index ?? 0, (match.index ?? 0) + 1, "tok-symbol");
+  }
+
+  ranges
+    .sort((first, second) => first.from - second.from || first.to - second.to)
+    .forEach((range) => {
+      builder.add(range.from, range.to, Decoration.mark({ class: range.className }));
+    });
+
+  return builder.finish();
+}
+
+function createSearchDecorations(matches: SearchMatch[], currentMatchIndex: number, wordHighlight: string, content: string) {
+  const builder = new RangeSetBuilder<Decoration>();
+  const ranges: HighlightRange[] = [
+    ...matches.map((match, index) => ({
+      ...match,
+      kind: "search" as const,
+      current: index === currentMatchIndex
+    })),
+    ...(wordHighlight ? findWholeWordMatches(content, wordHighlight).map((match) => ({
+      ...match,
+      kind: "word" as const
+    })) : [])
+  ]
+    .filter((range) => range.start < range.end)
+    .sort((first, second) => first.start - second.start || first.end - second.end);
+
+  let lastEnd = -1;
+  for (const range of ranges) {
+    const from = Math.max(0, Math.min(content.length, range.start));
+    const to = Math.max(from, Math.min(content.length, range.end));
+    if (from < lastEnd || from === to) {
+      continue;
+    }
+
+    builder.add(
+      from,
+      to,
+      Decoration.mark({
+        class: range.kind === "word"
+          ? "cm-word-highlight"
+          : range.current
+            ? "cm-search-match cm-search-current"
+            : "cm-search-match"
+      })
+    );
+    lastEnd = to;
+  }
+
+  return builder.finish();
+}
+
+const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(function CodeMirrorEditor({
+  content,
+  wordWrap,
+  matches,
+  currentMatchIndex,
+  wordHighlight,
+  fontStyle,
+  language,
+  onChange,
+  onCursorChange,
+  onCurrentMatchReset,
+  onWordHighlightChange,
+  onOpenSearchWidget,
+  onZoomWheel
+}, ref) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const viewRef = useRef<EditorView | null>(null);
+  const contentRef = useRef(content);
+  const wrapCompartmentRef = useRef(new Compartment());
+  const decorationCompartmentRef = useRef(new Compartment());
+  const syntaxCompartmentRef = useRef(new Compartment());
+  const changeRef = useRef(onChange);
+  const cursorRef = useRef(onCursorChange);
+  const resetRef = useRef(onCurrentMatchReset);
+  const wordRef = useRef(onWordHighlightChange);
+  const openSearchRef = useRef(onOpenSearchWidget);
+  const selectionVisualModeRef = useRef<"background" | "outline">("background");
+
+  useEffect(() => {
+    changeRef.current = onChange;
+    cursorRef.current = onCursorChange;
+    resetRef.current = onCurrentMatchReset;
+    wordRef.current = onWordHighlightChange;
+    openSearchRef.current = onOpenSearchWidget;
+  }, [onChange, onCurrentMatchReset, onCursorChange, onOpenSearchWidget, onWordHighlightChange]);
+
+  useEffect(() => {
+    contentRef.current = content;
+  }, [content]);
+
+  useImperativeHandle(ref, () => ({
+    focus: () => viewRef.current?.focus(),
+    setSelectionRange: (start, end) => {
+      const view = viewRef.current;
+      if (!view) {
+        return;
+      }
+      const safeStart = Math.max(0, Math.min(view.state.doc.length, start));
+      const safeEnd = Math.max(0, Math.min(view.state.doc.length, end));
+      view.dispatch({ selection: { anchor: safeStart, head: safeEnd }, scrollIntoView: true });
+      cursorRef.current(safeEnd);
+      view.focus();
+    },
+    getSelectionRange: () => {
+      const selection = viewRef.current?.state.selection.main;
+      return selection ? { start: selection.from, end: selection.to } : { start: 0, end: 0 };
+    },
+    scrollToOffset: (offset) => {
+      const view = viewRef.current;
+      if (!view) {
+        return;
+      }
+      const safeOffset = Math.max(0, Math.min(view.state.doc.length, offset));
+      view.dispatch({ effects: EditorView.scrollIntoView(safeOffset, { y: "center" }) });
+    }
+  }), []);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) {
+      return;
+    }
+
+    const searchDecorationField = StateField.define<DecorationSet>({
+      create: (state) => createSearchDecorations(matches, currentMatchIndex, wordHighlight, state.doc.toString()),
+      update: (decorations, transaction) => decorations.map(transaction.changes),
+      provide: (field) => EditorView.decorations.from(field)
+    });
+
+    const createSelectionDecorations = (state: EditorState) => {
+      const builder = new RangeSetBuilder<Decoration>();
+      const className = selectionVisualModeRef.current === "outline" ? "cm-current-selection-outline" : "cm-current-selection";
+      state.selection.ranges.forEach((range) => {
+        if (!range.empty) {
+          builder.add(range.from, range.to, Decoration.mark({ class: className }));
+        }
+      });
+      return builder.finish();
+    };
+
+    const selectionDecorationField = StateField.define<DecorationSet>({
+      create: createSelectionDecorations,
+      update: (_decorations, transaction) => createSelectionDecorations(transaction.state),
+      provide: (field) => EditorView.decorations.from(field)
+    });
+
+    const updateListener = EditorView.updateListener.of((update) => {
+      if (update.docChanged) {
+        const nextContent = update.state.doc.toString();
+        contentRef.current = nextContent;
+        changeRef.current(nextContent);
+        resetRef.current();
+      }
+      if (update.selectionSet || update.docChanged) {
+        cursorRef.current(update.state.selection.main.head);
+      }
+    });
+
+    const pointerListener = EditorView.domEventHandlers({
+      mousedown: (_event, view) => {
+        selectionVisualModeRef.current = "background";
+        view.dispatch({});
+        return false;
+      },
+      dblclick: (_event, view) => {
+        selectionVisualModeRef.current = "outline";
+        requestAnimationFrame(() => {
+          const selection = view.state.selection.main;
+          const range = normalizeWordRangeFromSelection(view.state.doc.toString(), selection.from, selection.to);
+          wordRef.current(range ? view.state.doc.sliceString(range.start, range.end) : "");
+          view.dispatch({});
+        });
+        return false;
+      },
+      click: () => {
+        wordRef.current("");
+        return false;
+      }
+    });
+
+    const selectionTheme = EditorView.theme({
+      "& .cm-selectionLayer": {
+        pointerEvents: "none"
+      },
+      "& .cm-selectionBackground": {
+        backgroundColor: "transparent !important"
+      },
+      "&.cm-focused .cm-selectionBackground": {
+        backgroundColor: "transparent !important"
+      },
+      "& .cm-content ::selection": {
+        backgroundColor: "transparent !important"
+      }
+    });
+
+    const view = new EditorView({
+      parent: host,
+      state: EditorState.create({
+        doc: contentRef.current,
+        extensions: [
+          Prec.highest(keymap.of([
+            {
+              key: "Mod-f",
+              run: () => {
+                openSearchRef.current("search");
+                return true;
+              }
+            },
+            {
+              key: "Mod-r",
+              run: () => {
+                openSearchRef.current("replace");
+                return true;
+              }
+            }
+          ])),
+          basicSetup,
+          selectionTheme,
+          keymap.of([indentWithTab]),
+          updateListener,
+          pointerListener,
+          wrapCompartmentRef.current.of(wordWrap ? EditorView.lineWrapping : []),
+          decorationCompartmentRef.current.of(searchDecorationField),
+          syntaxCompartmentRef.current.of(EditorView.decorations.of(createSyntaxDecorations(contentRef.current, language))),
+          selectionDecorationField
+        ]
+      })
+    });
+
+    viewRef.current = view;
+    return () => {
+      view.destroy();
+      viewRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) {
+      return;
+    }
+    const current = view.state.doc.toString();
+    if (current === content) {
+      return;
+    }
+    view.dispatch({
+      changes: { from: 0, to: current.length, insert: content },
+      selection: { anchor: Math.min(content.length, view.state.selection.main.head) }
+    });
+  }, [content]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) {
+      return;
+    }
+    view.dispatch({
+      effects: wrapCompartmentRef.current.reconfigure(wordWrap ? EditorView.lineWrapping : [])
+    });
+    requestAnimationFrame(() => view.requestMeasure());
+  }, [wordWrap]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) {
+      return;
+    }
+    requestAnimationFrame(() => view.requestMeasure());
+  }, [fontStyle]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) {
+      return;
+    }
+    const field = StateField.define<DecorationSet>({
+      create: (state) => createSearchDecorations(matches, currentMatchIndex, wordHighlight, state.doc.toString()),
+      update: (decorations, transaction) => decorations.map(transaction.changes),
+      provide: (field) => EditorView.decorations.from(field)
+    });
+    view.dispatch({ effects: decorationCompartmentRef.current.reconfigure(field) });
+  }, [currentMatchIndex, matches, wordHighlight]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) {
+      return;
+    }
+    view.dispatch({
+      effects: syntaxCompartmentRef.current.reconfigure(
+        EditorView.decorations.of(createSyntaxDecorations(view.state.doc.toString(), language))
+      )
+    });
+  }, [content, language]);
+
+  return <div ref={hostRef} className={wordWrap ? "cm-editor-host is-wrapping" : "cm-editor-host"} style={fontStyle} onWheel={onZoomWheel} />;
+});
+
 export default function App() {
   const [initialSession] = useState(() => loadInitialSession());
   const [tabs, setTabs] = useState<DocumentTab[]>(() => initialSession.tabs);
@@ -1164,18 +1603,18 @@ export default function App() {
   const [matches, setMatches] = useState<SearchMatch[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
+  const [isSearchWidgetOpen, setIsSearchWidgetOpen] = useState(false);
+  const [searchWidgetMode, setSearchWidgetMode] = useState<"search" | "replace">("search");
   const [isSearchResultsOpen, setIsSearchResultsOpen] = useState(false);
   const [replaceText, setReplaceText] = useState("");
   const [replaceScope, setReplaceScope] = useState<ReplaceScope>("all");
   const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
   const [wordWrap, setWordWrap] = useState(true);
+  const [editorZoom, setEditorZoom] = useState(100);
   const [cursor, setCursor] = useState(0);
   const [wordHighlight, setWordHighlight] = useState("");
-  const [editorViewport, setEditorViewport] = useState({ scrollTop: 0, height: 0 });
-  const editorRef = useRef<HTMLTextAreaElement | null>(null);
-  const editorPaneRef = useRef<HTMLDivElement | null>(null);
-  const lineNumbersRef = useRef<HTMLPreElement | null>(null);
-  const highlightRef = useRef<HTMLPreElement | null>(null);
+  const [editorViewport] = useState({ scrollTop: 0, height: 0 });
+  const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
   const languagePickerRef = useRef<HTMLDivElement | null>(null);
   const encodingPickerRef = useRef<HTMLDivElement | null>(null);
   const lineEndingPickerRef = useRef<HTMLDivElement | null>(null);
@@ -1213,10 +1652,11 @@ export default function App() {
       size: languageFont?.size && languageFont.size !== "default" ? languageFont.size : globalFont.size
     };
   }, [activeTab.language, globalFont, languageFonts]);
+  const effectiveFontSize = useMemo(() => Number(activeFont.size) * (editorZoom / 100), [activeFont.size, editorZoom]);
   const editorFontStyle = useMemo<CSSProperties>(() => ({
     "--editor-font-family": `"${activeFont.family}", "Cascadia Mono", "JetBrains Mono", Consolas, monospace`,
-    "--editor-font-size": `${activeFont.size}px`
-  } as CSSProperties), [activeFont]);
+    "--editor-font-size": `${effectiveFontSize}px`
+  } as CSSProperties), [activeFont.family, effectiveFontSize]);
 
   const updateActiveTab = useCallback((changes: Partial<DocumentTab>) => {
     setTabs((current) =>
@@ -1586,6 +2026,7 @@ export default function App() {
     try {
       const file = await invoke<FilePayload>("open_custom_languages_config");
       const existing = tabs.find((tab) => tab.path === file.path);
+      setIsSettingsOpen(false);
       if (existing) {
         setActiveId(existing.id);
         setStatus(`已切换到 ${existing.name}`);
@@ -1644,22 +2085,37 @@ export default function App() {
   }, []);
 
   const getSelectedText = useCallback(() => {
-    const editor = editorRef.current;
-    if (!editor || editor.selectionStart === editor.selectionEnd) {
+    const selection = editorRef.current?.getSelectionRange();
+    if (!selection || selection.start === selection.end) {
       return "";
     }
-    return activeTab.content.slice(editor.selectionStart, editor.selectionEnd);
+    return activeTab.content.slice(selection.start, selection.end);
   }, [activeTab.content]);
+
+  const openSearchWidget = useCallback((mode: "search" | "replace") => {
+    const selectedText = getSelectedText().trim();
+    if (selectedText) {
+      setQuery(selectedText);
+      setCurrentMatchIndex(-1);
+    }
+
+    setSearchWidgetMode(mode);
+    setIsSearchWidgetOpen(true);
+    requestAnimationFrame(() => {
+      document.getElementById(mode === "replace" ? "replace-input" : "search-input")?.focus();
+    });
+  }, [getSelectedText]);
 
   const toggleLineComment = useCallback(() => {
     const editor = editorRef.current;
-    if (!editor || document.activeElement !== editor) {
+    if (!editor) {
       return;
     }
 
     const comment = activeLanguage.comment;
-    const start = editor.selectionStart;
-    const end = editor.selectionEnd;
+    const selection = editor.getSelectionRange();
+    const start = selection.start;
+    const end = selection.end;
     const hasSelection = start !== end;
     const selectedText = activeTab.content.slice(start, end);
 
@@ -1795,12 +2251,13 @@ export default function App() {
       return;
     }
 
-    editorRef.current?.focus();
-    editorRef.current?.setSelectionRange(match.start, match.end);
+    const editor = editorRef.current;
+    editor?.setSelectionRange(match.start, match.end);
+    editor?.scrollToOffset(match.start);
     setCursor(match.end);
     setCurrentMatchIndex(index);
     setStatus(`匹配 ${index + 1}/${matches.length}`);
-  }, [matches]);
+  }, [lineStarts, matches]);
 
   const findNext = useCallback(() => {
     if (!query) {
@@ -1817,7 +2274,7 @@ export default function App() {
       return;
     }
 
-    const selectionEnd = editorRef.current?.selectionEnd ?? cursor;
+    const selectionEnd = editorRef.current?.getSelectionRange().end ?? cursor;
     const nextIndex =
       currentMatchIndex >= 0
         ? (currentMatchIndex + 1) % matches.length
@@ -1840,7 +2297,7 @@ export default function App() {
       return;
     }
 
-    const selectionStart = editorRef.current?.selectionStart ?? cursor;
+    const selectionStart = editorRef.current?.getSelectionRange().start ?? cursor;
     const previousIndex =
       currentMatchIndex >= 0
         ? (currentMatchIndex - 1 + matches.length) % matches.length
@@ -1865,9 +2322,10 @@ export default function App() {
     }
 
     const editor = editorRef.current;
+    const selection = editor?.getSelectionRange();
     const range =
-      replaceScope === "selection" && editor
-        ? getSelectedLineRange(activeTab.content, editor.selectionStart, editor.selectionEnd)
+      replaceScope === "selection" && selection && selection.start !== selection.end
+        ? getSelectedLineRange(activeTab.content, selection.start, selection.end)
         : { start: 0, end: activeTab.content.length };
     const scopedMatches = matches.filter(
       (match) => match.start >= range.start && match.end <= range.end
@@ -1918,26 +2376,26 @@ export default function App() {
     const targetLine = Math.min(requestedLine, totalLines);
     const targetCursor = lineStarts[targetLine - 1] ?? 0;
 
-    editorRef.current?.focus();
     editorRef.current?.setSelectionRange(targetCursor, targetCursor);
-    const editor = editorRef.current;
-    if (editor) {
-      const styles = window.getComputedStyle(editor);
-      const lineHeight = Number.parseFloat(styles.lineHeight) || 22;
-      const targetScrollTop = Math.max(0, (targetLine - 1) * lineHeight - editor.clientHeight / 3);
-      editor.scrollTop = targetScrollTop;
-      if (lineNumbersRef.current) {
-        lineNumbersRef.current.scrollTop = targetScrollTop;
-      }
-      if (highlightRef.current) {
-        highlightRef.current.scrollTop = targetScrollTop;
-      }
-    }
+    editorRef.current?.scrollToOffset(targetCursor);
     setCursor(targetCursor);
     setStatus(`已跳转到第 ${targetLine} 行`);
   }, [activeTab.content, cursor, lineStarts]);
 
-  const lineHeight = useMemo(() => Number(activeFont.size) * 1.55, [activeFont.size]);
+  const handleEditorWheel = useCallback((event: WheelEvent<HTMLDivElement>) => {
+    if (!event.ctrlKey) {
+      return;
+    }
+
+    event.preventDefault();
+    const direction = event.deltaY < 0 ? 1 : -1;
+    setEditorZoom((current) => {
+      const next = Math.min(maxEditorZoom, Math.max(minEditorZoom, current + direction * editorZoomStep));
+      return next === current ? current : next;
+    });
+  }, []);
+
+  const lineHeight = useMemo(() => effectiveFontSize * 1.55, [effectiveFontSize]);
   const editorVerticalPadding = 18;
   const virtualOverscan = 40;
 
@@ -1988,11 +2446,13 @@ export default function App() {
   }, [activeTab.content.length, editorViewport.height, editorViewport.scrollTop, lineHeight, lineStarts, stats.lines]);
 
   const lineNumbers = useMemo(() => {
+    const startLine = wordWrap ? 0 : virtualWindow.startLine;
+    const endLine = wordWrap ? stats.lines : virtualWindow.endLine;
     return Array.from(
-      { length: Math.max(0, virtualWindow.endLine - virtualWindow.startLine) },
-      (_, index) => virtualWindow.startLine + index + 1
+      { length: Math.max(0, endLine - startLine) },
+      (_, index) => startLine + index + 1
     ).join("\n");
-  }, [virtualWindow.endLine, virtualWindow.startLine]);
+  }, [stats.lines, virtualWindow.endLine, virtualWindow.startLine, wordWrap]);
   const virtualContentHeight = stats.lines * lineHeight;
 
   const renderHighlightedSyntax = useCallback((content: string) => {
@@ -2012,10 +2472,12 @@ export default function App() {
   }, [activeLanguage, textMateHighlighter, textMateLanguage, textMateLoadVersion]);
 
   const highlightedContent = useMemo(() => {
-    const visibleContent = activeTab.content.slice(virtualWindow.startOffset, virtualWindow.endOffset);
+    const highlightStart = wordWrap ? 0 : virtualWindow.startOffset;
+    const highlightEnd = wordWrap ? activeTab.content.length : virtualWindow.endOffset;
+    const visibleContent = activeTab.content.slice(highlightStart, highlightEnd);
     const wordMatches = wordHighlight ? findWholeWordMatches(visibleContent, wordHighlight).map((match) => ({
-      start: match.start + virtualWindow.startOffset,
-      end: match.end + virtualWindow.startOffset
+      start: match.start + highlightStart,
+      end: match.end + highlightStart
     })) : [];
     const ranges: HighlightRange[] = [
       ...wordMatches.map((match) => ({ ...match, kind: "word" as const })),
@@ -2025,7 +2487,7 @@ export default function App() {
           kind: "search" as const,
           current: index === currentMatchIndex
         }))
-        .filter((match) => match.end > virtualWindow.startOffset && match.start < virtualWindow.endOffset)
+        .filter((match) => match.end > highlightStart && match.start < highlightEnd)
     ].sort((first, second) => first.start - second.start || second.end - first.end);
 
     if (!ranges.length) {
@@ -2033,10 +2495,10 @@ export default function App() {
     }
 
     const nodes: ReactNode[] = [];
-    let position = virtualWindow.startOffset;
+    let position = highlightStart;
     ranges.forEach((range, index) => {
-      const start = Math.max(range.start, virtualWindow.startOffset);
-      const end = Math.min(range.end, virtualWindow.endOffset);
+      const start = Math.max(range.start, highlightStart);
+      const end = Math.min(range.end, highlightEnd);
       if (start < position || end <= start) {
         return;
       }
@@ -2061,16 +2523,16 @@ export default function App() {
       );
       position = end;
     });
-    if (position < virtualWindow.endOffset) {
+    if (position < highlightEnd) {
       nodes.push(
         <span key={`text-${position}-end`}>
-          {renderHighlightedSyntax(activeTab.content.slice(position, virtualWindow.endOffset))}
+          {renderHighlightedSyntax(activeTab.content.slice(position, highlightEnd))}
         </span>
       );
     }
 
     return nodes;
-  }, [activeTab.content, currentMatchIndex, matches, renderHighlightedSyntax, virtualWindow.endOffset, virtualWindow.startOffset, wordHighlight]);
+  }, [activeTab.content, currentMatchIndex, matches, renderHighlightedSyntax, virtualWindow.endOffset, virtualWindow.startOffset, wordHighlight, wordWrap]);
 
   const onEditorKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Tab") {
@@ -2112,12 +2574,7 @@ export default function App() {
       }
       if (key === "f") {
         event.preventDefault();
-        const selectedText = getSelectedText().trim();
-        if (selectedText) {
-          setQuery(selectedText);
-          setCurrentMatchIndex(-1);
-        }
-        document.getElementById("search-input")?.focus();
+        openSearchWidget("search");
       }
       if (key === "g") {
         event.preventDefault();
@@ -2125,12 +2582,7 @@ export default function App() {
       }
       if (key === "r") {
         event.preventDefault();
-        const selectedText = getSelectedText().trim();
-        if (selectedText) {
-          setQuery(selectedText);
-          setCurrentMatchIndex(-1);
-        }
-        document.getElementById("replace-input")?.focus();
+        openSearchWidget("replace");
       }
       if (key === "z") {
         event.preventDefault();
@@ -2144,7 +2596,7 @@ export default function App() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [addNewTab, getSelectedText, jumpToLine, openFile, save, saveAs, toggleLineComment, undo]);
+  }, [addNewTab, jumpToLine, openFile, openSearchWidget, save, saveAs, toggleLineComment, undo]);
 
   useEffect(() => {
     hasUnsavedTabsRef.current = hasUnsavedTabs;
@@ -2271,28 +2723,6 @@ export default function App() {
   }, [activeTab.diskModifiedMs, activeTab.diskSize, activeTab.name, activeTab.path]);
 
   useEffect(() => {
-    const editor = editorRef.current;
-    if (!editor) {
-      return;
-    }
-
-    const updateViewport = () => {
-      setEditorViewport((current) => {
-        const next = {
-          scrollTop: editor.scrollTop,
-          height: editor.clientHeight
-        };
-        return current.scrollTop === next.scrollTop && current.height === next.height ? current : next;
-      });
-    };
-
-    updateViewport();
-    const observer = new ResizeObserver(updateViewport);
-    observer.observe(editor);
-    return () => observer.disconnect();
-  }, [activeId]);
-
-  useEffect(() => {
     if (!isLanguagePickerOpen && !isEncodingPickerOpen && !isLineEndingPickerOpen) {
       return;
     }
@@ -2344,13 +2774,7 @@ export default function App() {
   return (
     <main
       className="app-shell"
-      onPointerDown={(event) => {
-        const target = event.target;
-        if (target instanceof Node && editorPaneRef.current?.contains(target)) {
-          return;
-        }
-        setWordHighlight("");
-      }}
+      onPointerDown={() => setWordHighlight("")}
     >
       <header className="topbar">
         <div className="window-title">
@@ -2374,7 +2798,7 @@ export default function App() {
         <div className="searchbar">
           <Search size={15} />
           <input
-            id="search-input"
+            id="topbar-search-input"
             value={query}
             onChange={(event) => {
               setQuery(event.target.value);
@@ -2425,7 +2849,7 @@ export default function App() {
         <div className="replacebar">
           <Replace size={15} />
           <input
-            id="replace-input"
+            id="topbar-replace-input"
             value={replaceText}
             onChange={(event) => setReplaceText(event.target.value)}
             onKeyDown={(event) => {
@@ -2479,7 +2903,7 @@ export default function App() {
               key={tab.id}
               className={tab.id === activeId ? "tab is-active" : "tab"}
               onClick={() => setActiveId(tab.id)}
-              title={tab.path ?? tab.name}
+              title={tab.path ? `${tab.name}\n${tab.path}` : tab.name}
             >
               <span className="tab-name">{dirty ? "• " : ""}{tab.name}</span>
               <span
@@ -2499,93 +2923,157 @@ export default function App() {
         })}
       </nav>
 
-      <section className="editor-wrap" style={editorFontStyle}>
-          <pre ref={lineNumbersRef} className="line-numbers" aria-hidden="true">
-            <span className="virtual-scroll-space" style={{ height: virtualContentHeight }}>
-              <span
-                className="virtual-line-number-content"
-                style={{ transform: `translateY(${virtualWindow.top}px)` }}
-              >
-                {lineNumbers}
-              </span>
-            </span>
-          </pre>
-          <div className="editor-pane" ref={editorPaneRef}>
-            <pre
-              ref={highlightRef}
-              className={wordWrap ? "highlight-layer" : "highlight-layer no-wrap"}
-              aria-hidden="true"
-            >
-              <span className="virtual-scroll-space" style={{ height: virtualContentHeight }}>
-                <span
-                  className="virtual-highlight-content"
-                  style={{ transform: `translateY(${virtualWindow.top}px)` }}
-                >
-                  {highlightedContent}
-                </span>
-              </span>
-            </pre>
-            <textarea
+      <section className={wordWrap ? "editor-wrap is-wrapping" : "editor-wrap"}>
+          <div className="editor-pane">
+            <CodeMirrorEditor
               ref={editorRef}
-              value={activeTab.content}
-              spellCheck={false}
-              wrap={wordWrap ? "soft" : "off"}
-              onChange={(event) => {
-                updateActiveContent(event.target.value);
-                setCursor(event.target.selectionStart);
-                setCurrentMatchIndex(-1);
-              }}
-              onKeyDown={onEditorKeyDown}
-              onClick={(event) => {
-                setCursor(event.currentTarget.selectionStart);
-                if (event.detail === 1) {
-                  setWordHighlight("");
-                }
-              }}
-              onDoubleClick={(event) => {
-                const target = event.currentTarget;
-                requestAnimationFrame(() => {
-                  const range = normalizeWordRangeFromSelection(
-                    activeTab.content,
-                    target.selectionStart,
-                    target.selectionEnd
-                  );
-                  if (!range) {
-                    setWordHighlight("");
-                    return;
-                  }
-
-                  const word = activeTab.content.slice(range.start, range.end);
-                  setCursor(target.selectionEnd);
-                  setWordHighlight(word);
-                });
-              }}
-              onKeyUp={(event) => setCursor(event.currentTarget.selectionStart)}
-              onMouseUp={(event) => setCursor(event.currentTarget.selectionStart)}
-              onScroll={(event) => {
-                const nextViewport = {
-                  scrollTop: event.currentTarget.scrollTop,
-                  height: event.currentTarget.clientHeight
-                };
-                setEditorViewport((current) =>
-                  current.scrollTop === nextViewport.scrollTop && current.height === nextViewport.height
-                    ? current
-                    : nextViewport
-                );
-                if (lineNumbersRef.current) {
-                  lineNumbersRef.current.scrollTop = event.currentTarget.scrollTop;
-                }
-                if (highlightRef.current) {
-                  highlightRef.current.scrollTop = event.currentTarget.scrollTop;
-                  highlightRef.current.scrollLeft = event.currentTarget.scrollLeft;
-                }
-              }}
-              aria-label="文本编辑器"
+              content={activeTab.content}
+              wordWrap={wordWrap}
+              matches={matches}
+              currentMatchIndex={currentMatchIndex}
+              wordHighlight={wordHighlight}
+              fontStyle={editorFontStyle}
+              language={activeLanguage}
+              onChange={updateActiveContent}
+              onCursorChange={setCursor}
+              onCurrentMatchReset={() => setCurrentMatchIndex(-1)}
+              onWordHighlightChange={setWordHighlight}
+              onOpenSearchWidget={openSearchWidget}
+              onZoomWheel={handleEditorWheel}
             />
+            {isSearchWidgetOpen ? (
+              <section className="search-widget" aria-label="Search and replace">
+                <div className="search-widget-row">
+                  <Search size={15} />
+                  <input
+                    id="search-input"
+                    value={query}
+                    onChange={(event) => {
+                      setQuery(event.target.value);
+                      setCurrentMatchIndex(-1);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.shiftKey ? findPrevious() : findNext();
+                      }
+                      if (event.key === "Escape") {
+                        setIsSearchWidgetOpen(false);
+                        editorRef.current?.focus();
+                      }
+                    }}
+                    placeholder="Find"
+                  />
+                  <span className="search-count">
+                    {searchError
+                      ? "搜索表达式无效"
+                      : isSearching
+                        ? `搜索中 ${matches.length}`
+                        : matches.length
+                          ? `匹配 ${matches.length} (${Math.max(currentMatchIndex + 1, 1)}/${matches.length})`
+                          : "匹配 0"}
+                  </span>
+                  <button
+                    className={searchOptions.caseSensitive ? "search-option is-active" : "search-option"}
+                    title="Match case"
+                    onClick={() => setSearchOptions((current) => ({ ...current, caseSensitive: !current.caseSensitive }))}
+                  >
+                    Aa
+                  </button>
+                  <button
+                    className={searchOptions.regex ? "search-option is-active" : "search-option"}
+                    title="Use regular expression"
+                    onClick={() => setSearchOptions((current) => ({ ...current, regex: !current.regex }))}
+                  >
+                    .*
+                  </button>
+                  <button
+                    className={searchOptions.wholeWord ? "search-option is-active" : "search-option"}
+                    title="Match whole word"
+                    onClick={() => setSearchOptions((current) => ({ ...current, wholeWord: !current.wholeWord }))}
+                  >
+                    W
+                  </button>
+                  <button
+                    className={isSearchResultsOpen ? "search-option is-active" : "search-option"}
+                    title="Search results"
+                    onClick={() => setIsSearchResultsOpen((value) => !value)}
+                  >
+                    <List size={14} />
+                  </button>
+                  <button title="Previous match" onClick={findPrevious} disabled={!matches.length || Boolean(searchError)}>
+                    <ChevronUp size={15} />
+                  </button>
+                  <button title="Next match" onClick={findNext} disabled={!matches.length || Boolean(searchError)}>
+                    <ChevronDown size={15} />
+                  </button>
+                  <button title="Close" onClick={() => setIsSearchWidgetOpen(false)}>
+                    <X size={15} />
+                  </button>
+                </div>
+                {searchWidgetMode === "replace" ? (
+                  <div className="search-widget-row replace-row">
+                    <Replace size={15} />
+                    <input
+                      id="replace-input"
+                      value={replaceText}
+                      onChange={(event) => setReplaceText(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          replaceMatches();
+                        }
+                        if (event.key === "Escape") {
+                          setIsSearchWidgetOpen(false);
+                          editorRef.current?.focus();
+                        }
+                      }}
+                      placeholder="Replace"
+                    />
+                    <select
+                      value={replaceScope}
+                      onChange={(event) => setReplaceScope(event.target.value as ReplaceScope)}
+                      title="Replace scope"
+                    >
+                      <option value="all">All</option>
+                      <option value="selection">Selection</option>
+                    </select>
+                    <button title="Replace" onClick={replaceMatches} disabled={!query || !matches.length || isSearching || Boolean(searchError)}>
+                      Replace
+                    </button>
+                  </div>
+                ) : null}
+                {isSearchResultsOpen ? (
+                  <div className="search-widget-results">
+                    {searchError ? (
+                      <p className="search-results-empty">{searchError}</p>
+                    ) : searchResults.length > 0 ? (
+                      <div className="search-results-list">
+                        {searchResults.map((result) => (
+                          <button
+                            key={`${result.index}-${result.line}-${result.column}`}
+                            className={result.index === currentMatchIndex ? "is-active" : undefined}
+                            onClick={() => selectMatch(result.index)}
+                          >
+                            <span>
+                              Line {result.line}, Col {result.column}
+                            </span>
+                            <small>{result.text}</small>
+                          </button>
+                        ))}
+                        {matches.length > searchResults.length ? (
+                          <p className="search-results-empty">Showing first {searchResults.length} results</p>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <p className="search-results-empty">{query ? "No results" : "Enter a search term"}</p>
+                    )}
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
           </div>
       </section>
 
-      {isSearchResultsOpen ? (
+      {false ? (
         <aside className="search-results-panel" aria-label="Search results">
           <div className="search-results-header">
             <strong>Search Results</strong>
@@ -2717,7 +3205,7 @@ export default function App() {
                       value={selectedFontLanguage}
                       onChange={(event) => setSelectedFontLanguage(event.target.value)}
                     >
-                      {languageOptions.map((language) => (
+                      {builtInLanguages.map((language) => (
                         <option key={language.name} value={language.name}>
                           {language.name}
                         </option>
@@ -2770,20 +3258,6 @@ export default function App() {
                       重新加载配置
                     </button>
                   </div>
-                  <div className="settings-list">
-                    {customLanguages.length > 0 ? (
-                      customLanguages.map((language) => (
-                        <div className="settings-list-item" key={language.name}>
-                          <span>
-                            <strong>{language.name}</strong>
-                            <small>.{language.extensions.join(", .")}</small>
-                          </span>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="empty-settings">还没有从 JSON 配置中加载自定义语言。</p>
-                    )}
-                  </div>
                 </div>
               )}
             </div>
@@ -2793,13 +3267,41 @@ export default function App() {
 
       <footer className="statusbar">
         <span>{status}</span>
-        <span>
-          {searchError
-            ? "搜索表达式无效"
-            : query
-              ? `${isSearching ? "搜索中 " : ""}匹配 ${matches.length}${currentMatchIndex >= 0 ? ` (${currentMatchIndex + 1}/${matches.length})` : ""}`
-              : "匹配 0"}
-        </span>
+        <span>行 {stats.line}, 列 {stats.column}</span>
+        <span>{stats.lines} 行</span>
+        <span className="status-words">{stats.words} 词</span>
+        <span className="status-chars">{stats.chars} 字符</span>
+        <span className="status-zoom" title="按住 Ctrl 并滚动鼠标滚轮可调整文本显示比例">{editorZoom}%</span>
+        <div className="status-language status-line-ending" ref={lineEndingPickerRef}>
+          <button
+            onClick={() => {
+              setIsLineEndingPickerOpen((value) => !value);
+              setIsEncodingPickerOpen(false);
+              setIsLanguagePickerOpen(false);
+            }}
+          >
+            {activeTab.lineEnding}
+          </button>
+          {isLineEndingPickerOpen ? (
+            <div className="language-picker line-ending-picker" role="listbox">
+              <div className="language-picker-list">
+                {lineEndingOptions.map((lineEnding) => (
+                  <button
+                    key={lineEnding.value}
+                    className={lineEnding.value === activeTab.lineEnding ? "is-active" : undefined}
+                    onClick={() => {
+                      switchLineEnding(lineEnding.value);
+                      setIsLineEndingPickerOpen(false);
+                    }}
+                  >
+                    <span>{lineEnding.label}</span>
+                    <small>{lineEnding.detail}</small>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
         <div className="status-language status-encoding" ref={encodingPickerRef}>
           <button
             onClick={() => {
@@ -2848,7 +3350,7 @@ export default function App() {
             </div>
           ) : null}
         </div>
-        <div className="status-language" ref={languagePickerRef}>
+        <div className="status-language status-current-language" ref={languagePickerRef}>
           <button
             onClick={() => {
               setIsLanguagePickerOpen((value) => !value);
@@ -2886,40 +3388,6 @@ export default function App() {
                 ) : (
                   <span className="language-picker-empty">没有匹配的语言</span>
                 )}
-              </div>
-            </div>
-          ) : null}
-        </div>
-        <span>行 {stats.line}, 列 {stats.column}</span>
-        <span>{stats.lines} 行</span>
-        <span>{stats.words} 词</span>
-        <span>{stats.chars} 字符</span>
-        <div className="status-language status-line-ending" ref={lineEndingPickerRef}>
-          <button
-            onClick={() => {
-              setIsLineEndingPickerOpen((value) => !value);
-              setIsEncodingPickerOpen(false);
-              setIsLanguagePickerOpen(false);
-            }}
-          >
-            {activeTab.lineEnding}
-          </button>
-          {isLineEndingPickerOpen ? (
-            <div className="language-picker line-ending-picker" role="listbox">
-              <div className="language-picker-list">
-                {lineEndingOptions.map((lineEnding) => (
-                  <button
-                    key={lineEnding.value}
-                    className={lineEnding.value === activeTab.lineEnding ? "is-active" : undefined}
-                    onClick={() => {
-                      switchLineEnding(lineEnding.value);
-                      setIsLineEndingPickerOpen(false);
-                    }}
-                  >
-                    <span>{lineEnding.label}</span>
-                    <small>{lineEnding.detail}</small>
-                  </button>
-                ))}
               </div>
             </div>
           ) : null}
