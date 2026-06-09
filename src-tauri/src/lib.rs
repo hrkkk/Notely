@@ -1,10 +1,15 @@
 use std::{
     borrow::Cow,
+    collections::BTreeSet,
     fs::{self, File},
     io::Write,
     path::{Path, PathBuf},
+    process::Command,
     time::UNIX_EPOCH,
 };
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 use encoding_rs::{GBK, WINDOWS_1252};
 use serde::Serialize;
@@ -481,6 +486,76 @@ fn open_custom_languages_config() -> Result<FilePayload, AppError> {
     read_text_file(path, None)
 }
 
+#[tauri::command]
+fn reveal_in_file_manager(path: String) -> Result<(), AppError> {
+    let path = PathBuf::from(path);
+    #[cfg(windows)]
+    {
+        Command::new("explorer")
+            .arg(format!("/select,{}", path.to_string_lossy()))
+            .spawn()?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg("-R").arg(path).spawn()?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let directory = path.parent().unwrap_or(Path::new("."));
+        Command::new("xdg-open").arg(directory).spawn()?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn relative_path(path: String) -> Result<String, AppError> {
+    let path = PathBuf::from(path);
+    let base = std::env::current_dir()?;
+    Ok(path
+        .strip_prefix(&base)
+        .unwrap_or(&path)
+        .to_string_lossy()
+        .into_owned())
+}
+
+#[tauri::command(async)]
+async fn list_system_fonts() -> Result<Vec<String>, AppError> {
+    #[cfg(windows)]
+    {
+        let fonts = tauri::async_runtime::spawn_blocking(|| -> Result<Vec<String>, AppError> {
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            let output = Command::new("powershell")
+                .creation_flags(CREATE_NO_WINDOW)
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-Command",
+                    "Add-Type -AssemblyName PresentationCore; [Windows.Media.Fonts]::SystemFontFamilies | ForEach-Object { $_.Source }",
+                ])
+                .output()?;
+            let text = String::from_utf8_lossy(&output.stdout);
+            Ok(text
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect())
+        })
+        .await
+        .map_err(|error| AppError::Codec(error.to_string()))??;
+        return Ok(fonts);
+    }
+
+    #[cfg(not(windows))]
+    {
+        Ok(Vec::new())
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
@@ -507,7 +582,10 @@ pub fn run() {
             save_file_dialog,
             write_file,
             read_custom_languages_config,
-            open_custom_languages_config
+            open_custom_languages_config,
+            reveal_in_file_manager,
+            relative_path,
+            list_system_fonts
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

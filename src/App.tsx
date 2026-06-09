@@ -3,25 +3,30 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { basicSetup } from "codemirror";
-import { indentWithTab } from "@codemirror/commands";
-import { EditorState, RangeSetBuilder, StateField, Compartment, Prec } from "@codemirror/state";
+import { defaultKeymap, historyKeymap, indentWithTab, toggleComment } from "@codemirror/commands";
+import { Compartment, EditorState, Extension, Prec, RangeSetBuilder, StateField } from "@codemirror/state";
 import { EditorView, Decoration, DecorationSet, keymap } from "@codemirror/view";
-import { createHighlighter } from "shiki";
-import {
-  ChevronDown,
-  ChevronUp,
-  FilePlus2,
-  FolderOpen,
-  Replace,
-  Save,
-  SaveAll,
-  Search,
-  List,
-  Settings2,
-  X,
-  WrapText
-} from "lucide-react";
-import { CSSProperties, KeyboardEvent, ReactNode, WheelEvent, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { css } from "@codemirror/lang-css";
+import { cpp } from "@codemirror/lang-cpp";
+import { go } from "@codemirror/lang-go";
+import { html } from "@codemirror/lang-html";
+import { java } from "@codemirror/lang-java";
+import { javascript } from "@codemirror/lang-javascript";
+import { json } from "@codemirror/lang-json";
+import { markdown } from "@codemirror/lang-markdown";
+import { php } from "@codemirror/lang-php";
+import { python } from "@codemirror/lang-python";
+import { rust } from "@codemirror/lang-rust";
+import { sql } from "@codemirror/lang-sql";
+import { yaml } from "@codemirror/lang-yaml";
+import { StreamLanguage, StringStream, type StreamParser } from "@codemirror/language";
+import { highlightSelectionMatches } from "@codemirror/search";
+import { c as legacyC, csharp, kotlin } from "@codemirror/legacy-modes/mode/clike";
+import { shell } from "@codemirror/legacy-modes/mode/shell";
+import { lua } from "@codemirror/legacy-modes/mode/lua";
+import { ruby } from "@codemirror/legacy-modes/mode/ruby";
+import { ChevronDown, ChevronUp, FilePlus2, FolderOpen, Replace, Save, SaveAll, Search, List, Settings2, X, WrapText } from "lucide-react";
+import { CSSProperties, MouseEvent, WheelEvent, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 
 type FilePayload = {
   path: string;
@@ -70,6 +75,17 @@ type SearchOptions = {
   regex: boolean;
 };
 
+type TabContextMenuState = {
+  tabId: string;
+  x: number;
+  y: number;
+} | null;
+
+type LineMenuState = {
+  x: number;
+  y: number;
+} | null;
+
 type SessionPayload = {
   tabs: DocumentTab[];
   activeId: string;
@@ -92,13 +108,13 @@ type CodeMirrorEditorProps = {
   wordWrap: boolean;
   matches: SearchMatch[];
   currentMatchIndex: number;
-  wordHighlight: string;
+  lineHighlights: SearchMatch[];
   fontStyle: CSSProperties;
   language: LanguageDefinition;
   onChange: (content: string) => void;
   onCursorChange: (cursor: number) => void;
   onCurrentMatchReset: () => void;
-  onWordHighlightChange: (word: string) => void;
+  onLineHighlightsClear: () => void;
   onOpenSearchWidget: (mode: "search" | "replace") => void;
   onZoomWheel: (event: WheelEvent<HTMLDivElement>) => void;
 };
@@ -189,7 +205,7 @@ const maxStoredSessionContentLength = 1_000_000;
 const minEditorZoom = 50;
 const maxEditorZoom = 200;
 const editorZoomStep = 10;
-const fontFamilies = [
+const fallbackFontFamilies = [
   "Cascadia Mono",
   "Cascadia Code",
   "JetBrains Mono",
@@ -214,66 +230,6 @@ const fontFamilies = [
   "Tahoma"
 ];
 const fontSizes = ["12", "13", "14", "15", "16", "18", "20", "22"];
-const textMateTheme = "github-light";
-const textMateLanguageByName: Record<string, string> = {
-  "c": "c",
-  "c#": "csharp",
-  "c++": "cpp",
-  "cmake": "cmake",
-  "css": "css",
-  "go": "go",
-  "html": "html",
-  "java": "java",
-  "javascript": "javascript",
-  "json": "json",
-  "kotlin": "kotlin",
-  "lua": "lua",
-  "markdown": "markdown",
-  "php": "php",
-  "plain text": "text",
-  "python": "python",
-  "ruby": "ruby",
-  "rust": "rust",
-  "shell": "shellscript",
-  "sql": "sql",
-  "typescript": "typescript",
-  "yaml": "yaml"
-};
-const textMateLanguageByExtension: Record<string, string> = {
-  bash: "shellscript",
-  c: "c",
-  cc: "cpp",
-  cmake: "cmake",
-  cpp: "cpp",
-  cs: "csharp",
-  css: "css",
-  go: "go",
-  h: "c",
-  hpp: "cpp",
-  htm: "html",
-  html: "html",
-  java: "java",
-  js: "javascript",
-  json: "json",
-  kt: "kotlin",
-  kts: "kotlin",
-  lua: "lua",
-  md: "markdown",
-  php: "php",
-  ps1: "powershell",
-  py: "python",
-  rb: "ruby",
-  rs: "rust",
-  scss: "scss",
-  sh: "shellscript",
-  sql: "sql",
-  ts: "typescript",
-  tsx: "tsx",
-  xml: "xml",
-  yaml: "yaml",
-  yml: "yaml",
-  zsh: "shellscript"
-};
 const encodingOptions = ["UTF-8", "UTF-8 BOM", "UTF-16 LE", "UTF-16 BE", "GBK", "Windows-1252"];
 const lineEndingOptions: Array<{ value: LineEnding; label: string; detail: string }> = [
   { value: "LF", label: "LF", detail: "\\n" },
@@ -598,7 +554,7 @@ function loadFontChoice(): FontChoice {
     }
     const parsed = JSON.parse(raw) as Partial<FontChoice>;
     return {
-      family: parsed.family && fontFamilies.includes(parsed.family) ? parsed.family : defaultFontChoice.family,
+      family: parsed.family || defaultFontChoice.family,
       size: parsed.size && fontSizes.includes(parsed.size) ? parsed.size : defaultFontChoice.size
     };
   } catch {
@@ -764,51 +720,148 @@ function getLanguageDefinition(name: string, customLanguages: LanguageDefinition
   );
 }
 
-function getTextMateLanguage(language: LanguageDefinition) {
-  const byName = textMateLanguageByName[language.name.toLowerCase()];
-  if (byName) {
-    return byName;
-  }
+type CustomLanguageState = {
+  inBlockComment: boolean;
+};
 
-  for (const extension of language.extensions) {
-    const byExtension = textMateLanguageByExtension[extension.toLowerCase()];
-    if (byExtension) {
-      return byExtension;
-    }
+function getCommentLanguageData(comment: CommentTokens) {
+  const commentTokens: { line?: string; block?: { open: string; close: string } } = {};
+  if (comment.line) {
+    commentTokens.line = comment.line;
   }
-
-  return undefined;
+  if (comment.blockStart && comment.blockEnd) {
+    commentTokens.block = { open: comment.blockStart, close: comment.blockEnd };
+  }
+  return Object.keys(commentTokens).length > 0 ? { commentTokens } : undefined;
 }
 
-function renderTextMateTokens(
-  highlighter: Awaited<ReturnType<typeof createHighlighter>>,
-  content: string,
-  language: string
-) {
-  const result = highlighter.codeToTokens(content, {
-    lang: language as never,
-    theme: textMateTheme as never
-  });
-
-  const nodes: ReactNode[] = [];
-  result.tokens.forEach((line, lineIndex) => {
-    line.forEach((token, tokenIndex) => {
-      const style: CSSProperties = {};
-      if (token.color) {
-        style.color = token.color;
-      }
-      nodes.push(
-        <span key={`${lineIndex}-${tokenIndex}`} style={style}>
-          {token.content}
-        </span>
-      );
-    });
-    if (lineIndex < result.tokens.length - 1) {
-      nodes.push("\n");
+function consumeUntilMatch(stream: StringStream, marker: string) {
+  while (!stream.eol()) {
+    if (stream.match(marker)) {
+      return true;
     }
-  });
+    stream.next();
+  }
+  return false;
+}
 
-  return nodes.length ? nodes : [content];
+function createCustomLanguageExtension(language: LanguageDefinition): Extension[] {
+  const keywords = new Set(language.keywords.map((keyword) => keyword.toLowerCase()));
+  const stringDelimiters = [...(language.stringDelimiters?.length ? language.stringDelimiters : ["'", '"'])]
+    .filter(Boolean)
+    .sort((first, second) => second.length - first.length);
+  const lineComment = language.comment.line;
+  const blockStart = language.comment.blockStart;
+  const blockEnd = language.comment.blockEnd;
+
+  const parser: StreamParser<CustomLanguageState> = {
+    name: language.name,
+    startState: () => ({ inBlockComment: false }),
+    token: (stream, state) => {
+      if (state.inBlockComment) {
+        if (blockEnd && consumeUntilMatch(stream, blockEnd)) {
+          state.inBlockComment = false;
+        } else {
+          stream.skipToEnd();
+        }
+        return "comment";
+      }
+
+      if (stream.eatSpace()) {
+        return null;
+      }
+
+      if (lineComment && stream.match(lineComment)) {
+        stream.skipToEnd();
+        return "comment";
+      }
+
+      if (blockStart && blockEnd && stream.match(blockStart)) {
+        if (!consumeUntilMatch(stream, blockEnd)) {
+          state.inBlockComment = true;
+        }
+        return "comment";
+      }
+
+      for (const delimiter of stringDelimiters) {
+        if (stream.match(delimiter)) {
+          let escaped = false;
+          while (!stream.eol()) {
+            if (!escaped && stream.match(delimiter)) {
+              break;
+            }
+            const next = stream.next();
+            escaped = next === "\\" && !escaped;
+            if (next !== "\\") {
+              escaped = false;
+            }
+          }
+          return "string";
+        }
+      }
+
+      if (stream.match(/\d+(?:\.\d+)?/)) {
+        return null;
+      }
+
+      if (stream.match(/[\p{L}_$][\p{L}\p{N}_$-]*/u)) {
+        return keywords.has(stream.current().toLowerCase()) ? "keyword" : "variableName";
+      }
+
+      stream.next();
+      return null;
+    },
+    languageData: getCommentLanguageData(language.comment)
+  };
+
+  return [StreamLanguage.define(parser)];
+}
+
+function getLanguageExtensions(language: LanguageDefinition): Extension[] {
+  switch (language.name.toLowerCase()) {
+    case "javascript":
+      return [javascript({ jsx: true })];
+    case "typescript":
+      return [javascript({ jsx: true, typescript: true })];
+    case "python":
+      return [python()];
+    case "java":
+      return [java()];
+    case "c":
+      return [StreamLanguage.define(legacyC)];
+    case "c++":
+      return [cpp()];
+    case "c#":
+      return [StreamLanguage.define(csharp)];
+    case "rust":
+      return [rust()];
+    case "go":
+      return [go()];
+    case "shell":
+      return [StreamLanguage.define(shell)];
+    case "sql":
+      return [sql()];
+    case "html":
+      return [html()];
+    case "css":
+      return [css()];
+    case "json":
+      return [json()];
+    case "yaml":
+      return [yaml()];
+    case "markdown":
+      return [markdown()];
+    case "ruby":
+      return [StreamLanguage.define(ruby)];
+    case "php":
+      return [php()];
+    case "lua":
+      return [StreamLanguage.define(lua)];
+    case "kotlin":
+      return [StreamLanguage.define(kotlin)];
+    default:
+      return language.isCustom ? createCustomLanguageExtension(language) : [];
+  }
 }
 
 function createEmptyTab(): DocumentTab {
@@ -959,61 +1012,6 @@ function findMatchesInRange(content: string, query: string, options: SearchOptio
   return matches;
 }
 
-function getWordRangeAt(content: string, cursor: number): SearchMatch | null {
-  if (!content) {
-    return null;
-  }
-
-  let index = Math.min(cursor, content.length - 1);
-  if (!isIdentifierCharacter(content[index]) && index > 0 && isIdentifierCharacter(content[index - 1])) {
-    index -= 1;
-  }
-  if (!isIdentifierCharacter(content[index])) {
-    return null;
-  }
-
-  let start = index;
-  let end = index + 1;
-  while (start > 0 && isIdentifierCharacter(content[start - 1])) {
-    start -= 1;
-  }
-  while (end < content.length && isIdentifierCharacter(content[end])) {
-    end += 1;
-  }
-  return { start, end };
-}
-
-function normalizeWordRangeFromSelection(content: string, start: number, end: number): SearchMatch | null {
-  const selectionStart = Math.min(start, end);
-  const selectionEnd = Math.max(start, end);
-
-  for (let index = selectionStart; index < selectionEnd; index += 1) {
-    if (isIdentifierCharacter(content[index])) {
-      return getWordRangeAt(content, index);
-    }
-  }
-
-  return getWordRangeAt(content, selectionStart);
-}
-
-function findWholeWordMatches(content: string, word: string): SearchMatch[] {
-  if (!word) {
-    return [];
-  }
-
-  const matches: SearchMatch[] = [];
-  let index = content.indexOf(word);
-  while (index !== -1) {
-    const before = index === 0 ? "" : content[index - 1];
-    const after = index + word.length >= content.length ? "" : content[index + word.length];
-    if ((!before || !isIdentifierCharacter(before)) && (!after || !isIdentifierCharacter(after))) {
-      matches.push({ start: index, end: index + word.length });
-    }
-    index = content.indexOf(word, index + word.length);
-  }
-  return matches;
-}
-
 function getSelectedLineRange(content: string, start: number, end: number) {
   const selectionStart = Math.min(start, end);
   const selectionEnd = Math.max(start, end);
@@ -1047,282 +1045,59 @@ function findPreviousMatchIndex(matches: SearchMatch[], cursor: number) {
   return -1;
 }
 
-function isWordCharacter(value: string) {
-  return /[A-Za-z0-9_$-]/.test(value);
-}
-
-function findStringEnd(content: string, start: number, delimiter: string) {
-  let index = start + delimiter.length;
-  while (index < content.length) {
-    if (content[index] === "\\") {
-      index += 2;
-      continue;
-    }
-    if (content.startsWith(delimiter, index)) {
-      return index + delimiter.length;
-    }
-    index += 1;
-  }
-  return content.length;
-}
-
-function pushSyntaxNode(nodes: ReactNode[], className: string, text: string, key: string, style?: CSSProperties) {
-  nodes.push(
-    <span className={className} key={key} style={style}>
-      {text}
-    </span>
-  );
-}
-
-function highlightSyntax(content: string, language: LanguageDefinition): ReactNode[] {
-  if (!content) {
-    return [" "];
-  }
-
-  const nodes: ReactNode[] = [];
-  const keywords = new Set(language.keywords.map((keyword) => keyword.toLowerCase()));
-  const keywordStyles = language.keywordStyles ?? {};
-  const stringDelimiters = language.stringDelimiters ?? ["'", '"', "`"];
-  const comment = language.comment;
-  let index = 0;
-
-  while (index < content.length) {
-    const key = `${index}`;
-
-    if (comment.blockStart && comment.blockEnd && content.startsWith(comment.blockStart, index)) {
-      const end = content.indexOf(comment.blockEnd, index + comment.blockStart.length);
-      const next = end === -1 ? content.length : end + comment.blockEnd.length;
-      pushSyntaxNode(nodes, "tok-comment", content.slice(index, next), key);
-      index = next;
-      continue;
-    }
-
-    if (comment.line && content.startsWith(comment.line, index)) {
-      const lineEnd = content.indexOf("\n", index + comment.line.length);
-      const next = lineEnd === -1 ? content.length : lineEnd;
-      pushSyntaxNode(nodes, "tok-comment", content.slice(index, next), key);
-      index = next;
-      continue;
-    }
-
-    if (language.type === "markup" && content[index] === "<") {
-      const end = content.indexOf(">", index + 1);
-      const next = end === -1 ? content.length : end + 1;
-      const tag = content.slice(index, next);
-      const parts = tag.split(/(\s+|=|["'][^"']*["']|\/?>|<|\/|[A-Za-z_:][\w:.-]*)/g).filter(Boolean);
-      nodes.push(
-        <span className="tok-tag" key={key}>
-          {parts.map((part, partIndex) => {
-            if (/^["']/.test(part)) {
-              return <span className="tok-string" key={partIndex}>{part}</span>;
-            }
-            if (/^[A-Za-z_:][\w:.-]*$/.test(part) && partIndex > 0) {
-              return <span className="tok-attr" key={partIndex}>{part}</span>;
-            }
-            return part;
-          })}
-        </span>
-      );
-      index = next;
-      continue;
-    }
-
-    if (stringDelimiters.some((delimiter) => content.startsWith(delimiter, index))) {
-      const delimiter = stringDelimiters.find((value) => content.startsWith(value, index)) ?? content[index];
-      const next = findStringEnd(content, index, delimiter);
-      pushSyntaxNode(nodes, "tok-string", content.slice(index, next), key);
-      index = next;
-      continue;
-    }
-
-    if (/\d/.test(content[index])) {
-      const match = content.slice(index).match(/^(0x[\da-fA-F]+|\d+(\.\d+)?)/);
-      if (match) {
-        pushSyntaxNode(nodes, "tok-number", match[0], key);
-        index += match[0].length;
-        continue;
-      }
-    }
-
-    if (/[A-Za-z_$]/.test(content[index])) {
-      let end = index + 1;
-      while (end < content.length && isWordCharacter(content[end])) {
-        end += 1;
-      }
-      const word = content.slice(index, end);
-      const lowerWord = word.toLowerCase();
-      if (keywords.has(lowerWord)) {
-        pushSyntaxNode(nodes, "tok-keyword", word, key, keywordStyles[lowerWord]);
-      } else if (language.type === "css" && content[end] === ":") {
-        pushSyntaxNode(nodes, "tok-property", word, key);
-      } else {
-        nodes.push(word);
-      }
-      index = end;
-      continue;
-    }
-
-    if (language.type === "markdown" && content[index] === "#") {
-      const lineEnd = content.indexOf("\n", index);
-      const next = lineEnd === -1 ? content.length : lineEnd;
-      pushSyntaxNode(nodes, "tok-heading", content.slice(index, next), key);
-      index = next;
-      continue;
-    }
-
-    if (/[{}()[\].,;:+\-*/%=!<>|&?]/.test(content[index])) {
-      pushSyntaxNode(nodes, "tok-symbol", content[index], key);
-      index += 1;
-      continue;
-    }
-
-    nodes.push(content[index]);
-    index += 1;
-  }
-
-  return nodes;
-}
-
-function createSyntaxDecorations(content: string, language: LanguageDefinition) {
+function createSearchDecorations(matches: SearchMatch[], currentMatchIndex: number, lineHighlights: SearchMatch[], content: string) {
   const builder = new RangeSetBuilder<Decoration>();
-  const keywordStyles = language.keywordStyles ?? {};
-  const isCustomLanguage = language.isCustom === true;
-  const ranges: Array<{ from: number; to: number; className: string; color?: string }> = [];
-  const addRange = (from: number, to: number, className: string, color?: string) => {
-    if (from < to) {
-      ranges.push({ from, to, className, color });
-    }
-  };
+  const entries: Array<{ from: number; to: number; decoration: Decoration; line?: boolean }> = [];
 
-  if (isCustomLanguage) {
-    if (language.keywords.length) {
-      const keywordPattern = new RegExp(`\\b(${language.keywords.map(escapeRegExp).join("|")})\\b`, "gi");
-      for (const match of content.matchAll(keywordPattern)) {
-        const color = keywordStyles[match[0].toLowerCase()]?.color;
-        if (typeof color === "string" && color.trim()) {
-          addRange(match.index ?? 0, (match.index ?? 0) + match[0].length, "tok-custom-keyword", color);
-        }
-      }
-    }
-
-    ranges
-      .sort((first, second) => first.from - second.from || first.to - second.to)
-      .forEach((range) => {
-        builder.add(
-          range.from,
-          range.to,
-          Decoration.mark({
-            class: range.className,
-            attributes: range.color ? { style: `color: ${range.color}` } : undefined
-          })
-        );
+  lineHighlights.forEach((range) => {
+    const from = Math.max(0, Math.min(content.length, range.start));
+    const line = content ? EditorState.create({ doc: content }).doc.lineAt(from) : null;
+    if (line) {
+      entries.push({
+        from: line.from,
+        to: line.from,
+        line: true,
+        decoration: Decoration.line({ class: "cm-line-highlight" })
       });
-
-    return builder.finish();
-  }
-
-  const stringPattern = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/g;
-  for (const match of content.matchAll(stringPattern)) {
-    addRange(match.index ?? 0, (match.index ?? 0) + match[0].length, "tok-string");
-  }
-
-  const numberPattern = /\b\d+(?:\.\d+)?\b/g;
-  for (const match of content.matchAll(numberPattern)) {
-    addRange(match.index ?? 0, (match.index ?? 0) + match[0].length, "tok-number");
-  }
-
-  if (language.comment.line) {
-    const escaped = escapeRegExp(language.comment.line);
-    const commentPattern = new RegExp(`${escaped}.*`, "gm");
-    for (const match of content.matchAll(commentPattern)) {
-      addRange(match.index ?? 0, (match.index ?? 0) + match[0].length, "tok-comment");
     }
-  }
+  });
 
-  if (language.comment.blockStart && language.comment.blockEnd) {
-    const blockPattern = new RegExp(`${escapeRegExp(language.comment.blockStart)}[\\s\\S]*?${escapeRegExp(language.comment.blockEnd)}`, "g");
-    for (const match of content.matchAll(blockPattern)) {
-      addRange(match.index ?? 0, (match.index ?? 0) + match[0].length, "tok-comment");
-    }
-  }
-
-  if (language.type === "markdown") {
-    const headingPattern = /^#{1,6}[^\n]*/gm;
-    for (const match of content.matchAll(headingPattern)) {
-      addRange(match.index ?? 0, (match.index ?? 0) + match[0].length, "tok-heading");
-    }
-  }
-
-  if (language.type === "markup") {
-    const tagPattern = /<\/?[A-Za-z][\w:-]*/g;
-    for (const match of content.matchAll(tagPattern)) {
-      addRange(match.index ?? 0, (match.index ?? 0) + match[0].length, "tok-tag");
-    }
-    const attrPattern = /\s([A-Za-z_:][-A-Za-z0-9_:.]*)(?=\s*=)/g;
-    for (const match of content.matchAll(attrPattern)) {
-      const from = (match.index ?? 0) + match[0].indexOf(match[1]);
-      addRange(from, from + match[1].length, "tok-attr");
-    }
-  }
-
-  if (language.keywords.length) {
-    const keywordPattern = new RegExp(`\\b(${language.keywords.map(escapeRegExp).join("|")})\\b`, "g");
-    for (const match of content.matchAll(keywordPattern)) {
-      addRange(match.index ?? 0, (match.index ?? 0) + match[0].length, "tok-keyword");
-    }
-  }
-
-  const symbolPattern = /[{}()[\].,;:+\-*/%=!<>|&?]/g;
-  for (const match of content.matchAll(symbolPattern)) {
-    addRange(match.index ?? 0, (match.index ?? 0) + 1, "tok-symbol");
-  }
-
-  ranges
-    .sort((first, second) => first.from - second.from || first.to - second.to)
-    .forEach((range) => {
-      builder.add(range.from, range.to, Decoration.mark({ class: range.className }));
-    });
-
-  return builder.finish();
-}
-
-function createSearchDecorations(matches: SearchMatch[], currentMatchIndex: number, wordHighlight: string, content: string) {
-  const builder = new RangeSetBuilder<Decoration>();
-  const ranges: HighlightRange[] = [
-    ...matches.map((match, index) => ({
+  matches
+    .map((match, index) => ({
       ...match,
       kind: "search" as const,
       current: index === currentMatchIndex
-    })),
-    ...(wordHighlight ? findWholeWordMatches(content, wordHighlight).map((match) => ({
-      ...match,
-      kind: "word" as const
-    })) : [])
-  ]
+    }))
     .filter((range) => range.start < range.end)
-    .sort((first, second) => first.start - second.start || first.end - second.end);
+    .forEach((range) => {
+      const from = Math.max(0, Math.min(content.length, range.start));
+      const to = Math.max(from, Math.min(content.length, range.end));
+      if (from === to) {
+        return;
+      }
+      entries.push({
+        from,
+        to,
+        decoration: Decoration.mark({
+          class: range.current
+            ? "cm-searchMatch cm-searchMatch-selected"
+            : "cm-searchMatch"
+        })
+      });
+    });
 
-  let lastEnd = -1;
-  for (const range of ranges) {
-    const from = Math.max(0, Math.min(content.length, range.start));
-    const to = Math.max(from, Math.min(content.length, range.end));
-    if (from < lastEnd || from === to) {
-      continue;
-    }
-
-    builder.add(
-      from,
-      to,
-      Decoration.mark({
-        class: range.kind === "word"
-          ? "cm-word-highlight"
-          : range.current
-            ? "cm-search-match cm-search-current"
-            : "cm-search-match"
-      })
-    );
-    lastEnd = to;
-  }
+  let lastMarkEnd = -1;
+  entries
+    .sort((first, second) => first.from - second.from || first.to - second.to || Number(Boolean(second.line)) - Number(Boolean(first.line)))
+    .forEach((entry) => {
+      if (!entry.line) {
+        if (entry.from < lastMarkEnd) {
+          return;
+        }
+        lastMarkEnd = entry.to;
+      }
+      builder.add(entry.from, entry.to, entry.decoration);
+    });
 
   return builder.finish();
 }
@@ -1332,13 +1107,13 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProp
   wordWrap,
   matches,
   currentMatchIndex,
-  wordHighlight,
+  lineHighlights,
   fontStyle,
   language,
   onChange,
   onCursorChange,
   onCurrentMatchReset,
-  onWordHighlightChange,
+  onLineHighlightsClear,
   onOpenSearchWidget,
   onZoomWheel
 }, ref) {
@@ -1347,21 +1122,20 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProp
   const contentRef = useRef(content);
   const wrapCompartmentRef = useRef(new Compartment());
   const decorationCompartmentRef = useRef(new Compartment());
-  const syntaxCompartmentRef = useRef(new Compartment());
+  const languageCompartmentRef = useRef(new Compartment());
   const changeRef = useRef(onChange);
   const cursorRef = useRef(onCursorChange);
   const resetRef = useRef(onCurrentMatchReset);
-  const wordRef = useRef(onWordHighlightChange);
+  const clearLineHighlightsRef = useRef(onLineHighlightsClear);
   const openSearchRef = useRef(onOpenSearchWidget);
-  const selectionVisualModeRef = useRef<"background" | "outline">("background");
 
   useEffect(() => {
     changeRef.current = onChange;
     cursorRef.current = onCursorChange;
     resetRef.current = onCurrentMatchReset;
-    wordRef.current = onWordHighlightChange;
+    clearLineHighlightsRef.current = onLineHighlightsClear;
     openSearchRef.current = onOpenSearchWidget;
-  }, [onChange, onCurrentMatchReset, onCursorChange, onOpenSearchWidget, onWordHighlightChange]);
+  }, [onChange, onCurrentMatchReset, onCursorChange, onLineHighlightsClear, onOpenSearchWidget]);
 
   useEffect(() => {
     contentRef.current = content;
@@ -1401,25 +1175,8 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProp
     }
 
     const searchDecorationField = StateField.define<DecorationSet>({
-      create: (state) => createSearchDecorations(matches, currentMatchIndex, wordHighlight, state.doc.toString()),
+      create: (state) => createSearchDecorations(matches, currentMatchIndex, lineHighlights, state.doc.toString()),
       update: (decorations, transaction) => decorations.map(transaction.changes),
-      provide: (field) => EditorView.decorations.from(field)
-    });
-
-    const createSelectionDecorations = (state: EditorState) => {
-      const builder = new RangeSetBuilder<Decoration>();
-      const className = selectionVisualModeRef.current === "outline" ? "cm-current-selection-outline" : "cm-current-selection";
-      state.selection.ranges.forEach((range) => {
-        if (!range.empty) {
-          builder.add(range.from, range.to, Decoration.mark({ class: className }));
-        }
-      });
-      return builder.finish();
-    };
-
-    const selectionDecorationField = StateField.define<DecorationSet>({
-      create: createSelectionDecorations,
-      update: (_decorations, transaction) => createSelectionDecorations(transaction.state),
       provide: (field) => EditorView.decorations.from(field)
     });
 
@@ -1429,46 +1186,17 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProp
         contentRef.current = nextContent;
         changeRef.current(nextContent);
         resetRef.current();
+        clearLineHighlightsRef.current();
       }
       if (update.selectionSet || update.docChanged) {
         cursorRef.current(update.state.selection.main.head);
       }
     });
 
-    const pointerListener = EditorView.domEventHandlers({
-      mousedown: (_event, view) => {
-        selectionVisualModeRef.current = "background";
-        view.dispatch({});
+    const clearLineHighlightsOnDoubleClick = EditorView.domEventHandlers({
+      dblclick: () => {
+        clearLineHighlightsRef.current();
         return false;
-      },
-      dblclick: (_event, view) => {
-        selectionVisualModeRef.current = "outline";
-        requestAnimationFrame(() => {
-          const selection = view.state.selection.main;
-          const range = normalizeWordRangeFromSelection(view.state.doc.toString(), selection.from, selection.to);
-          wordRef.current(range ? view.state.doc.sliceString(range.start, range.end) : "");
-          view.dispatch({});
-        });
-        return false;
-      },
-      click: () => {
-        wordRef.current("");
-        return false;
-      }
-    });
-
-    const selectionTheme = EditorView.theme({
-      "& .cm-selectionLayer": {
-        pointerEvents: "none"
-      },
-      "& .cm-selectionBackground": {
-        backgroundColor: "transparent !important"
-      },
-      "&.cm-focused .cm-selectionBackground": {
-        backgroundColor: "transparent !important"
-      },
-      "& .cm-content ::selection": {
-        backgroundColor: "transparent !important"
       }
     });
 
@@ -1491,17 +1219,25 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProp
                 openSearchRef.current("replace");
                 return true;
               }
-            }
+            },
+            {
+              key: "Mod-/",
+              run: toggleComment
+            },
+            {
+              key: "Ctrl-/",
+              run: toggleComment
+            },
+            indentWithTab
           ])),
           basicSetup,
-          selectionTheme,
-          keymap.of([indentWithTab]),
+          keymap.of([...defaultKeymap, ...historyKeymap]),
           updateListener,
-          pointerListener,
+          clearLineHighlightsOnDoubleClick,
+          highlightSelectionMatches({ wholeWords: true }),
           wrapCompartmentRef.current.of(wordWrap ? EditorView.lineWrapping : []),
           decorationCompartmentRef.current.of(searchDecorationField),
-          syntaxCompartmentRef.current.of(EditorView.decorations.of(createSyntaxDecorations(contentRef.current, language))),
-          selectionDecorationField
+          languageCompartmentRef.current.of(getLanguageExtensions(language))
         ]
       })
     });
@@ -1553,12 +1289,12 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProp
       return;
     }
     const field = StateField.define<DecorationSet>({
-      create: (state) => createSearchDecorations(matches, currentMatchIndex, wordHighlight, state.doc.toString()),
+      create: (state) => createSearchDecorations(matches, currentMatchIndex, lineHighlights, state.doc.toString()),
       update: (decorations, transaction) => decorations.map(transaction.changes),
       provide: (field) => EditorView.decorations.from(field)
     });
     view.dispatch({ effects: decorationCompartmentRef.current.reconfigure(field) });
-  }, [currentMatchIndex, matches, wordHighlight]);
+  }, [currentMatchIndex, lineHighlights, matches]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -1566,11 +1302,9 @@ const CodeMirrorEditor = forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProp
       return;
     }
     view.dispatch({
-      effects: syntaxCompartmentRef.current.reconfigure(
-        EditorView.decorations.of(createSyntaxDecorations(view.state.doc.toString(), language))
-      )
+      effects: languageCompartmentRef.current.reconfigure(getLanguageExtensions(language))
     });
-  }, [content, language]);
+  }, [language]);
 
   return <div ref={hostRef} className={wordWrap ? "cm-editor-host is-wrapping" : "cm-editor-host"} style={fontStyle} onWheel={onZoomWheel} />;
 });
@@ -1581,8 +1315,6 @@ export default function App() {
   const [activeId, setActiveId] = useState(() => initialSession.activeId);
   const [status, setStatus] = useState("就绪");
   const [customLanguages, setCustomLanguages] = useState<LanguageDefinition[]>([]);
-  const [textMateHighlighter, setTextMateHighlighter] = useState<Awaited<ReturnType<typeof createHighlighter>> | null>(null);
-  const [textMateLoadVersion, setTextMateLoadVersion] = useState(0);
   const [globalFont, setGlobalFont] = useState<FontChoice>(() => loadFontChoice());
   const [languageFonts, setLanguageFonts] = useState<Record<string, LanguageFontChoice>>(() => loadLanguageFontChoices());
   const [selectedFontLanguage, setSelectedFontLanguage] = useState("Plain Text");
@@ -1609,11 +1341,13 @@ export default function App() {
   const [replaceText, setReplaceText] = useState("");
   const [replaceScope, setReplaceScope] = useState<ReplaceScope>("all");
   const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
+  const [lineHighlights, setLineHighlights] = useState<SearchMatch[]>([]);
+  const [tabContextMenu, setTabContextMenu] = useState<TabContextMenuState>(null);
+  const [lineMenu, setLineMenu] = useState<LineMenuState>(null);
+  const [systemFonts, setSystemFonts] = useState<string[]>(fallbackFontFamilies);
   const [wordWrap, setWordWrap] = useState(true);
   const [editorZoom, setEditorZoom] = useState(100);
   const [cursor, setCursor] = useState(0);
-  const [wordHighlight, setWordHighlight] = useState("");
-  const [editorViewport] = useState({ scrollTop: 0, height: 0 });
   const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
   const languagePickerRef = useRef<HTMLDivElement | null>(null);
   const encodingPickerRef = useRef<HTMLDivElement | null>(null);
@@ -1644,7 +1378,6 @@ export default function App() {
     () => getLanguageDefinition(activeTab.language, customLanguages),
     [activeTab.language, customLanguages]
   );
-  const textMateLanguage = useMemo(() => getTextMateLanguage(activeLanguage), [activeLanguage]);
   const activeFont = useMemo(() => {
     const languageFont = languageFonts[activeTab.language];
     return {
@@ -1652,6 +1385,7 @@ export default function App() {
       size: languageFont?.size && languageFont.size !== "default" ? languageFont.size : globalFont.size
     };
   }, [activeTab.language, globalFont, languageFonts]);
+  const fontFamilies = useMemo(() => Array.from(new Set([...systemFonts, activeFont.family, globalFont.family].filter(Boolean))).sort((first, second) => first.localeCompare(second)), [activeFont.family, globalFont.family, systemFonts]);
   const effectiveFontSize = useMemo(() => Number(activeFont.size) * (editorZoom / 100), [activeFont.size, editorZoom]);
   const editorFontStyle = useMemo<CSSProperties>(() => ({
     "--editor-font-family": `"${activeFont.family}", "Cascadia Mono", "JetBrains Mono", Consolas, monospace`,
@@ -1774,19 +1508,20 @@ export default function App() {
     }
   }, [customLanguages, tabs]);
 
-  const saveAs = useCallback(async () => {
+  const saveTabAs = useCallback(async (tab: DocumentTab) => {
     try {
       const file = await invoke<FilePayload | null>("save_file_dialog", {
-        defaultPath: activeTab.path ?? activeTab.name,
-        content: activeTab.content,
-        encoding: activeTab.encoding,
-        lineEnding: activeTab.lineEnding
+        defaultPath: tab.path ?? tab.name,
+        content: tab.content,
+        encoding: tab.encoding,
+        lineEnding: tab.lineEnding
       });
       if (!file) {
         setStatus("已取消保存");
         return false;
       }
-      updateActiveTab({
+      setTabs((current) => current.map((item) => item.id === tab.id ? {
+        ...item,
         name: file.name,
         path: file.path,
         content: file.content,
@@ -1798,14 +1533,16 @@ export default function App() {
         ...fileStateFromPayload(file),
         language: detectLanguage(file.name, customLanguages),
         history: []
-      });
+      } : item));
       setStatus(`已保存 ${file.name}`);
       return true;
     } catch (error) {
       setStatus(`保存失败：${String(error)}`);
       return false;
     }
-  }, [activeTab, customLanguages, updateActiveTab]);
+  }, [customLanguages]);
+
+  const saveAs = useCallback(() => saveTabAs(activeTab), [activeTab, saveTabAs]);
 
   const save = useCallback(async () => {
     if (!activeTab.path) {
@@ -1975,6 +1712,84 @@ export default function App() {
     });
   }, [activeId]);
 
+  const closeOtherTabs = useCallback((id: string) => {
+    setTabs((current) => {
+      const target = current.find((tab) => tab.id === id);
+      if (!target) {
+        return current;
+      }
+      const dirtyOthers = current.filter((tab) => tab.id !== id && isTabDirty(tab));
+      if (dirtyOthers.length && !window.confirm(`有 ${dirtyOthers.length} 个其他标签页尚未保存，确定关闭吗？`)) {
+        return current;
+      }
+      setActiveId(id);
+      return [target];
+    });
+  }, []);
+
+  const closeSavedTabs = useCallback(() => {
+    setTabs((current) => {
+      const next = current.filter(isTabDirty);
+      if (!next.length) {
+        const blank = createEmptyTab();
+        setActiveId(blank.id);
+        return [blank];
+      }
+      if (!next.some((tab) => tab.id === activeId)) {
+        setActiveId(next[0].id);
+      }
+      return next;
+    });
+  }, [activeId]);
+
+  const closeAllTabs = useCallback(() => {
+    if (tabs.some(isTabDirty) && !window.confirm("还有未保存的标签页，确定全部关闭吗？")) {
+      return;
+    }
+    const blank = createEmptyTab();
+    setTabs([blank]);
+    setActiveId(blank.id);
+  }, [tabs]);
+
+  const copyText = useCallback(async (text: string, message: string) => {
+    if (!text) {
+      setStatus("当前标签页没有文件路径");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatus(message);
+    } catch (error) {
+      setStatus(`复制失败：${String(error)}`);
+    }
+  }, []);
+
+  const copyRelativePath = useCallback(async (tab: DocumentTab) => {
+    if (!tab.path) {
+      setStatus("当前标签页没有文件路径");
+      return;
+    }
+    try {
+      const path = await invoke<string>("relative_path", { path: tab.path });
+      await copyText(path, "已复制相对路径");
+    } catch (error) {
+      setStatus(`复制失败：${String(error)}`);
+    }
+  }, [copyText]);
+
+  const revealTabInFileManager = useCallback(async (tab: DocumentTab) => {
+    if (!tab.path) {
+      setStatus("当前标签页没有文件路径");
+      return;
+    }
+    try {
+      await invoke("reveal_in_file_manager", { path: tab.path });
+      setStatus("已在文件资源管理器中打开");
+    } catch (error) {
+      setStatus(`打开失败：${String(error)}`);
+    }
+  }, []);
+
   const undo = useCallback(() => {
     let restoredCursor = 0;
     let didUndo = false;
@@ -2091,6 +1906,17 @@ export default function App() {
     }
     return activeTab.content.slice(selection.start, selection.end);
   }, [activeTab.content]);
+
+  const closeSearchWidget = useCallback(() => {
+    setIsSearchWidgetOpen(false);
+    setQuery("");
+    setReplaceText("");
+    setMatches([]);
+    setCurrentMatchIndex(-1);
+    setSearchError("");
+    setIsSearching(false);
+    editorRef.current?.focus();
+  }, []);
 
   const openSearchWidget = useCallback((mode: "search" | "replace") => {
     const selectedText = getSelectedText().trim();
@@ -2245,6 +2071,20 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [activeTab.content, query, searchOptions]);
 
+  const visibleMatchIndex = useMemo(() => {
+    if (!matches.length) {
+      return -1;
+    }
+    if (currentMatchIndex >= 0) {
+      return currentMatchIndex;
+    }
+    const selection = editorRef.current?.getSelectionRange();
+    if (!selection || selection.start === selection.end) {
+      return -1;
+    }
+    return matches.findIndex((match) => match.start === selection.start && match.end === selection.end);
+  }, [currentMatchIndex, cursor, matches]);
+
   const selectMatch = useCallback((index: number) => {
     const match = matches[index];
     if (!match) {
@@ -2395,9 +2235,88 @@ export default function App() {
     });
   }, []);
 
-  const lineHeight = useMemo(() => effectiveFontSize * 1.55, [effectiveFontSize]);
-  const editorVerticalPadding = 18;
-  const virtualOverscan = 40;
+  const getMatchedSelectedLineRanges = useCallback(() => {
+    const selection = editorRef.current?.getSelectionRange();
+    if (!selection || selection.start === selection.end) {
+      return [getSelectedLineRange(activeTab.content, cursor, cursor)];
+    }
+
+    const selectedText = activeTab.content.slice(selection.start, selection.end);
+    if (!selectedText) {
+      return [getSelectedLineRange(activeTab.content, selection.start, selection.end)];
+    }
+
+    const exactMatches: SearchMatch[] = [];
+    let index = activeTab.content.indexOf(selectedText);
+    while (index !== -1) {
+      exactMatches.push({ start: index, end: index + selectedText.length });
+      index = activeTab.content.indexOf(selectedText, index + Math.max(selectedText.length, 1));
+    }
+
+    const ranges = (exactMatches.length ? exactMatches : [{ start: selection.start, end: selection.end }])
+      .map((match) => getSelectedLineRange(activeTab.content, match.start, match.end))
+      .sort((first, second) => first.start - second.start || first.end - second.end);
+
+    return ranges.filter((range, rangeIndex) => {
+      const previous = ranges[rangeIndex - 1];
+      return !previous || previous.start !== range.start || previous.end !== range.end;
+    });
+  }, [activeTab.content, cursor]);
+
+  const updateContentWithSelection = useCallback((content: string, start: number, end = start) => {
+    updateActiveContent(content);
+    setCursor(end);
+    requestAnimationFrame(() => {
+      editorRef.current?.focus();
+      editorRef.current?.setSelectionRange(start, end);
+    });
+  }, [updateActiveContent]);
+
+  const copyLines = useCallback(async (mode: "random" | "odd" | "even") => {
+    const lines = activeTab.content.split("\n");
+    let selected: string[] = [];
+    if (mode === "random") {
+      const input = window.prompt("随机复制多少行？", "1");
+      if (input === null) return;
+      const count = Math.max(0, Math.min(lines.length, Number.parseInt(input, 10) || 0));
+      selected = [...lines].sort(() => Math.random() - 0.5).slice(0, count);
+    } else {
+      selected = lines.filter((_, index) => mode === "odd" ? index % 2 === 0 : index % 2 === 1);
+    }
+    await copyText(selected.join("\n"), `已复制 ${selected.length} 行`);
+  }, [activeTab.content, copyText]);
+
+  const highlightSelectedLines = useCallback(() => {
+    const ranges = getMatchedSelectedLineRanges();
+    setLineHighlights(ranges);
+    if (ranges.length) {
+      editorRef.current?.scrollToOffset(ranges[0].start);
+    }
+    setStatus(`已高亮 ${ranges.length} 个匹配行`);
+  }, [getMatchedSelectedLineRanges]);
+
+  const copySelectedLines = useCallback(async () => {
+    const ranges = getMatchedSelectedLineRanges();
+    await copyText(ranges.map((range) => activeTab.content.slice(range.start, range.end)).join("\n"), `已复制 ${ranges.length} 个匹配行`);
+  }, [activeTab.content, copyText, getMatchedSelectedLineRanges]);
+
+  const deleteSelectedLines = useCallback(() => {
+    const ranges = getMatchedSelectedLineRanges();
+    let next = activeTab.content;
+    [...ranges].reverse().forEach((range) => {
+      const removeEnd = next[range.end] === "\n" ? range.end + 1 : range.end;
+      next = `${next.slice(0, range.start)}${next.slice(removeEnd)}`;
+    });
+    updateContentWithSelection(next, Math.min(ranges[0]?.start ?? 0, next.length));
+    setStatus(`已删除 ${ranges.length} 个匹配行`);
+  }, [activeTab.content, getMatchedSelectedLineRanges, updateContentWithSelection]);
+
+  const keepSelectedLines = useCallback(() => {
+    const ranges = getMatchedSelectedLineRanges();
+    const selected = ranges.map((range) => activeTab.content.slice(range.start, range.end)).join("\n");
+    updateContentWithSelection(selected, 0, selected.length);
+    setStatus(`已保留 ${ranges.length} 个匹配行`);
+  }, [activeTab.content, getMatchedSelectedLineRanges, updateContentWithSelection]);
 
   const stats = useMemo(() => {
     const lines = lineStarts.length;
@@ -2427,136 +2346,55 @@ export default function App() {
     });
   }, [activeTab.content, lineStarts, matches]);
 
-  const virtualWindow = useMemo(() => {
-    const visibleStart = Math.max(0, Math.floor((editorViewport.scrollTop - editorVerticalPadding) / lineHeight));
-    const visibleCount = Math.max(1, Math.ceil((editorViewport.height || 1) / lineHeight));
-    const startLine = Math.max(0, visibleStart - virtualOverscan);
-    const endLine = Math.min(stats.lines, visibleStart + visibleCount + virtualOverscan);
-    const startOffset = lineStarts[startLine] ?? 0;
-    const endOffset = endLine >= stats.lines
-      ? activeTab.content.length
-      : Math.max(0, (lineStarts[endLine] ?? activeTab.content.length) - 1);
-    return {
-      startLine,
-      endLine,
-      startOffset,
-      endOffset,
-      top: startLine * lineHeight
+  useEffect(() => {
+    if (!isSettingsOpen) {
+      return;
+    }
+    let canceled = false;
+    const timer = window.setTimeout(() => {
+      void invoke<string[]>("list_system_fonts")
+        .then((fonts) => {
+          if (!canceled && fonts.length) {
+            setSystemFonts(fonts);
+          }
+        })
+        .catch(() => {
+          if (!canceled) {
+            setSystemFonts(fallbackFontFamilies);
+          }
+        });
+    }, 0);
+    return () => {
+      canceled = true;
+      window.clearTimeout(timer);
     };
-  }, [activeTab.content.length, editorViewport.height, editorViewport.scrollTop, lineHeight, lineStarts, stats.lines]);
+  }, [isSettingsOpen]);
 
-  const lineNumbers = useMemo(() => {
-    const startLine = wordWrap ? 0 : virtualWindow.startLine;
-    const endLine = wordWrap ? stats.lines : virtualWindow.endLine;
-    return Array.from(
-      { length: Math.max(0, endLine - startLine) },
-      (_, index) => startLine + index + 1
-    ).join("\n");
-  }, [stats.lines, virtualWindow.endLine, virtualWindow.startLine, wordWrap]);
-  const virtualContentHeight = stats.lines * lineHeight;
-
-  const renderHighlightedSyntax = useCallback((content: string) => {
-    if (
-      textMateHighlighter &&
-      textMateLanguage &&
-      (textMateLanguage === "text" || textMateHighlighter.getLoadedLanguages().includes(textMateLanguage))
-    ) {
-      try {
-        return renderTextMateTokens(textMateHighlighter, content, textMateLanguage);
-      } catch {
-        // Fall through to the legacy scanner if a grammar fails on an edge case.
-      }
-    }
-
-    return highlightSyntax(content, activeLanguage);
-  }, [activeLanguage, textMateHighlighter, textMateLanguage, textMateLoadVersion]);
-
-  const highlightedContent = useMemo(() => {
-    const highlightStart = wordWrap ? 0 : virtualWindow.startOffset;
-    const highlightEnd = wordWrap ? activeTab.content.length : virtualWindow.endOffset;
-    const visibleContent = activeTab.content.slice(highlightStart, highlightEnd);
-    const wordMatches = wordHighlight ? findWholeWordMatches(visibleContent, wordHighlight).map((match) => ({
-      start: match.start + highlightStart,
-      end: match.end + highlightStart
-    })) : [];
-    const ranges: HighlightRange[] = [
-      ...wordMatches.map((match) => ({ ...match, kind: "word" as const })),
-      ...matches
-        .map((match, index) => ({
-          ...match,
-          kind: "search" as const,
-          current: index === currentMatchIndex
-        }))
-        .filter((match) => match.end > highlightStart && match.start < highlightEnd)
-    ].sort((first, second) => first.start - second.start || second.end - first.end);
-
-    if (!ranges.length) {
-      return renderHighlightedSyntax(visibleContent);
-    }
-
-    const nodes: ReactNode[] = [];
-    let position = highlightStart;
-    ranges.forEach((range, index) => {
-      const start = Math.max(range.start, highlightStart);
-      const end = Math.min(range.end, highlightEnd);
-      if (start < position || end <= start) {
-        return;
-      }
-
-      if (start > position) {
-        nodes.push(
-          <span key={`text-${position}-${start}`}>
-            {renderHighlightedSyntax(activeTab.content.slice(position, start))}
-          </span>
-        );
-      }
-      nodes.push(
-        <mark
-          key={`${range.kind}-${start}-${end}-${index}`}
-          className={[
-            range.kind === "word" ? "is-word" : "",
-            range.current ? "is-current" : ""
-          ].filter(Boolean).join(" ") || undefined}
-        >
-          {renderHighlightedSyntax(activeTab.content.slice(start, end))}
-        </mark>
-      );
-      position = end;
-    });
-    if (position < highlightEnd) {
-      nodes.push(
-        <span key={`text-${position}-end`}>
-          {renderHighlightedSyntax(activeTab.content.slice(position, highlightEnd))}
-        </span>
-      );
-    }
-
-    return nodes;
-  }, [activeTab.content, currentMatchIndex, matches, renderHighlightedSyntax, virtualWindow.endOffset, virtualWindow.startOffset, wordHighlight, wordWrap]);
-
-  const onEditorKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Tab") {
-      event.preventDefault();
-      const target = event.currentTarget;
-      const start = target.selectionStart;
-      const end = target.selectionEnd;
-      const next = `${activeTab.content.slice(0, start)}  ${activeTab.content.slice(end)}`;
-      updateActiveContent(next);
-      requestAnimationFrame(() => {
-        target.selectionStart = start + 2;
-        target.selectionEnd = start + 2;
-        setCursor(start + 2);
-      });
-    }
-  };
+  useEffect(() => {
+    const closeMenus = () => {
+      setTabContextMenu(null);
+      setLineMenu(null);
+    };
+    window.addEventListener("click", closeMenus);
+    window.addEventListener("scroll", closeMenus, true);
+    return () => {
+      window.removeEventListener("click", closeMenus);
+      window.removeEventListener("scroll", closeMenus, true);
+    };
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey)) {
+      if (event.defaultPrevented || !(event.ctrlKey || event.metaKey)) {
         return;
       }
 
       const key = event.key.toLowerCase();
+      const target = event.target instanceof Element ? event.target : null;
+      const isCodeMirrorEvent = Boolean(target?.closest(".cm-editor"));
+      if (isCodeMirrorEvent && (key === "z" || key === "/")) {
+        return;
+      }
       if (key === "n") {
         event.preventDefault();
         addNewTab();
@@ -2612,47 +2450,6 @@ export default function App() {
     }, 120);
     return () => window.clearTimeout(timer);
   }, [reloadCustomLanguages]);
-
-  useEffect(() => {
-    let canceled = false;
-    void createHighlighter({
-      themes: [textMateTheme as never],
-      langs: []
-    }).then((highlighter) => {
-      if (!canceled) {
-        setTextMateHighlighter(highlighter);
-      }
-    }).catch((error) => {
-      setStatus(`TextMate highlighter failed: ${String(error)}`);
-    });
-
-    return () => {
-      canceled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!textMateHighlighter || !textMateLanguage || textMateLanguage === "text") {
-      return;
-    }
-
-    if (textMateHighlighter.getLoadedLanguages().includes(textMateLanguage)) {
-      return;
-    }
-
-    let canceled = false;
-    void textMateHighlighter.loadLanguage(textMateLanguage as never).then(() => {
-      if (!canceled) {
-        setTextMateLoadVersion((value) => value + 1);
-      }
-    }).catch(() => {
-      // Unsupported or failed grammars fall back to the legacy scanner.
-    });
-
-    return () => {
-      canceled = true;
-    };
-  }, [textMateHighlighter, textMateLanguage]);
 
   useEffect(() => {
     if (startupFilesLoadedRef.current) {
@@ -2772,10 +2569,7 @@ export default function App() {
   }, []);
 
   return (
-    <main
-      className="app-shell"
-      onPointerDown={() => setWordHighlight("")}
-    >
+    <main className="app-shell">
       <header className="topbar">
         <div className="window-title">
           <span className="app-mark">N</span>
@@ -2793,6 +2587,17 @@ export default function App() {
           </button>
           <button title="另存为" onClick={() => void saveAs()}>
             <SaveAll size={17} />
+          </button>
+          <button
+            title="行操作"
+            onClick={(event) => {
+              event.stopPropagation();
+              const rect = event.currentTarget.getBoundingClientRect();
+              setTabContextMenu(null);
+              setLineMenu({ x: rect.left, y: rect.bottom + 6 });
+            }}
+          >
+            <List size={17} />
           </button>
         </div>
         <div className="searchbar">
@@ -2903,6 +2708,11 @@ export default function App() {
               key={tab.id}
               className={tab.id === activeId ? "tab is-active" : "tab"}
               onClick={() => setActiveId(tab.id)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                setActiveId(tab.id);
+                setTabContextMenu({ tabId: tab.id, x: event.clientX, y: event.clientY });
+              }}
               title={tab.path ? `${tab.name}\n${tab.path}` : tab.name}
             >
               <span className="tab-name">{dirty ? "• " : ""}{tab.name}</span>
@@ -2931,13 +2741,13 @@ export default function App() {
               wordWrap={wordWrap}
               matches={matches}
               currentMatchIndex={currentMatchIndex}
-              wordHighlight={wordHighlight}
+              lineHighlights={lineHighlights}
               fontStyle={editorFontStyle}
               language={activeLanguage}
               onChange={updateActiveContent}
               onCursorChange={setCursor}
               onCurrentMatchReset={() => setCurrentMatchIndex(-1)}
-              onWordHighlightChange={setWordHighlight}
+              onLineHighlightsClear={() => setLineHighlights([])}
               onOpenSearchWidget={openSearchWidget}
               onZoomWheel={handleEditorWheel}
             />
@@ -2957,8 +2767,7 @@ export default function App() {
                         event.shiftKey ? findPrevious() : findNext();
                       }
                       if (event.key === "Escape") {
-                        setIsSearchWidgetOpen(false);
-                        editorRef.current?.focus();
+                        closeSearchWidget();
                       }
                     }}
                     placeholder="Find"
@@ -2969,7 +2778,7 @@ export default function App() {
                       : isSearching
                         ? `搜索中 ${matches.length}`
                         : matches.length
-                          ? `匹配 ${matches.length} (${Math.max(currentMatchIndex + 1, 1)}/${matches.length})`
+                          ? `匹配 ${matches.length} (${Math.max(visibleMatchIndex + 1, 1)}/${matches.length})`
                           : "匹配 0"}
                   </span>
                   <button
@@ -3006,7 +2815,7 @@ export default function App() {
                   <button title="Next match" onClick={findNext} disabled={!matches.length || Boolean(searchError)}>
                     <ChevronDown size={15} />
                   </button>
-                  <button title="Close" onClick={() => setIsSearchWidgetOpen(false)}>
+                  <button title="Close" onClick={closeSearchWidget}>
                     <X size={15} />
                   </button>
                 </div>
@@ -3022,8 +2831,7 @@ export default function App() {
                           replaceMatches();
                         }
                         if (event.key === "Escape") {
-                          setIsSearchWidgetOpen(false);
-                          editorRef.current?.focus();
+                          closeSearchWidget();
                         }
                       }}
                       placeholder="Replace"
@@ -3071,9 +2879,56 @@ export default function App() {
               </section>
             ) : null}
           </div>
-      </section>
+     </section>
 
-      {false ? (
+     {tabContextMenu ? (() => {
+       const tab = tabs.find((item) => item.id === tabContextMenu.tabId);
+       if (!tab) {
+         return null;
+       }
+       return (
+         <div
+           className="context-menu"
+           style={{ left: tabContextMenu.x, top: tabContextMenu.y }}
+           onClick={(event) => event.stopPropagation()}
+           onPointerDown={(event) => event.stopPropagation()}
+         >
+           <button onClick={() => { closeTab(tab.id); setTabContextMenu(null); }}>关闭</button>
+           <button onClick={() => { closeOtherTabs(tab.id); setTabContextMenu(null); }}>关闭其他</button>
+           <button onClick={() => { closeSavedTabs(); setTabContextMenu(null); }}>关闭已保存</button>
+           <button onClick={() => { closeAllTabs(); setTabContextMenu(null); }}>全部关闭</button>
+           <div className="context-menu-separator" />
+           <button onClick={() => { void saveTabAs(tab); setTabContextMenu(null); }}>另存为</button>
+           <button disabled={!tab.path} onClick={() => { void copyRelativePath(tab); setTabContextMenu(null); }}>复制相对路径</button>
+           <button disabled={!tab.path} onClick={() => { void copyText(tab.path ?? "", "已复制绝对路径"); setTabContextMenu(null); }}>复制绝对路径</button>
+           <button disabled={!tab.path} onClick={() => { void revealTabInFileManager(tab); setTabContextMenu(null); }}>在文件资源管理器中打开</button>
+         </div>
+       );
+     })() : null}
+
+     {lineMenu ? (
+       <div
+         className="context-menu"
+         style={{ left: lineMenu.x, top: lineMenu.y }}
+         onClick={(event) => event.stopPropagation()}
+         onPointerDown={(event) => event.stopPropagation()}
+       >
+         <button onClick={() => { void copyLines("random"); setLineMenu(null); }}>随机复制N行</button>
+         <button onClick={() => { void copyLines("odd"); setLineMenu(null); }}>复制奇数行</button>
+         <button onClick={() => { void copyLines("even"); setLineMenu(null); }}>复制偶数行</button>
+         {editorRef.current?.getSelectionRange().start !== editorRef.current?.getSelectionRange().end ? (
+           <>
+             <div className="context-menu-separator" />
+             <button onClick={() => { highlightSelectedLines(); setLineMenu(null); }}>高亮所在行</button>
+             <button onClick={() => { void copySelectedLines(); setLineMenu(null); }}>复制所在行</button>
+             <button onClick={() => { deleteSelectedLines(); setLineMenu(null); }}>删除所在行</button>
+             <button onClick={() => { keepSelectedLines(); setLineMenu(null); }}>删除所在行之外的行</button>
+           </>
+         ) : null}
+       </div>
+     ) : null}
+
+     {false ? (
         <aside className="search-results-panel" aria-label="Search results">
           <div className="search-results-header">
             <strong>Search Results</strong>
