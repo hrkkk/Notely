@@ -13,7 +13,7 @@ use std::os::windows::process::CommandExt;
 
 use encoding_rs::{GBK, WINDOWS_1252};
 use serde::Serialize;
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, Window};
 
 #[derive(Debug, thiserror::Error)]
 enum AppError {
@@ -131,6 +131,13 @@ fn ensure_custom_languages_config() -> Result<PathBuf, AppError> {
         "keywords": "ON OFF TRUE FALSE YES NO",
         "color": "#b25f00"
       }
+    ],
+    "regexHighlights": [
+      {
+        "pattern": "\\\\$\\\\{[A-Za-z_][A-Za-z0-9_]*\\\\}",
+        "color": "#0f766e",
+        "backgroundColor": "#ccfbf1"
+      }
     ]
   },
   {
@@ -149,6 +156,13 @@ fn ensure_custom_languages_config() -> Result<PathBuf, AppError> {
       {
         "keywords": "true false null",
         "color": "#b25f00"
+      }
+    ],
+    "regexHighlights": [
+      {
+        "pattern": "\\\\b[A-Z_]{2,}\\\\b",
+        "color": "#0f766e",
+        "backgroundColor": "#ccfbf1"
       }
     ]
   }
@@ -448,20 +462,48 @@ fn save_file_dialog(
     encoding: String,
     line_ending: String,
 ) -> Result<Option<FilePayload>, AppError> {
-    let mut dialog = rfd::FileDialog::new().set_title("Save text file");
+    let mut dialog = rfd::FileDialog::new()
+        .set_title("Save text file")
+        .add_filter("Text file", &["txt"])
+        .add_filter("Markdown", &["md", "markdown"])
+        .add_filter("Log", &["log"])
+        .add_filter("JSON", &["json"])
+        .add_filter("Source code", &[
+            "js", "jsx", "ts", "tsx", "rs", "py", "java", "c", "cpp", "h", "cs", "go", "sql",
+            "html", "css", "xml", "yaml", "yml", "sh", "ps1",
+        ])
+        .add_filter("All files", &["*"]);
     if let Some(path) = default_path {
         let path = PathBuf::from(path);
         if let Some(parent) = path.parent().filter(|value| !value.as_os_str().is_empty()) {
             dialog = dialog.set_directory(parent);
         }
-        if let Some(name) = path.file_name().and_then(|value| value.to_str()) {
-            dialog = dialog.set_file_name(name);
-        }
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("Untitled.txt");
+        let file_name = if Path::new(file_name).extension().is_some() {
+            file_name.to_string()
+        } else {
+            format!("{file_name}.txt")
+        };
+        dialog = dialog.set_file_name(file_name);
+    } else {
+        dialog = dialog.set_file_name("Untitled.txt");
     }
 
-    let Some(path) = dialog.save_file() else {
+    let Some(mut path) = dialog.save_file() else {
         return Ok(None);
     };
+
+    if path.extension().is_none() {
+        path.set_extension("txt");
+    }
+
+    if path.extension().is_none() {
+        path.set_extension("txt");
+    }
 
     write_file_atomic(&path, &encode_content(&content, &encoding, &line_ending)?)?;
     Ok(Some(file_payload(path, content, encoding, line_ending)))
@@ -556,6 +598,13 @@ async fn list_system_fonts() -> Result<Vec<String>, AppError> {
     }
 }
 
+#[tauri::command]
+fn set_window_title(window: Window, title: String) -> Result<(), AppError> {
+    window.set_title(&title).map_err(|error| {
+        AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))
+    })
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
@@ -585,7 +634,8 @@ pub fn run() {
             open_custom_languages_config,
             reveal_in_file_manager,
             relative_path,
-            list_system_fonts
+            list_system_fonts,
+            set_window_title
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
