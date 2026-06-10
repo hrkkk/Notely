@@ -444,6 +444,11 @@ button {
   flex-wrap: wrap;
 }
 
+.setting-inline-status {
+  color: #52606d;
+  font-size: 12px;
+}
+
 .settings-list {
   display: grid;
   gap: 6px;

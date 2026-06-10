@@ -160,13 +160,47 @@ function getIndentGuideColumns(text: string, tabSize: number) {
   }
 
   const columns: number[] = [];
-  for (let guide = tabSize; guide <= column; guide += tabSize) {
+  for (let guide = 0; guide < column; guide += tabSize) {
     columns.push(guide);
   }
   return columns;
 }
 
-function createLineBackgroundStyle(text: string, options: EditorDisplayOptions, tabSize: number, isLastLine: boolean) {
+function getBlankLineIndentGuideColumns(state: EditorState, lineNumber: number, tabSize: number) {
+  let previousColumns: number[] = [];
+  for (let current = lineNumber - 1; current >= 1; current -= 1) {
+    const text = state.doc.line(current).text;
+    if (text.trim().length > 0) {
+      previousColumns = getIndentGuideColumns(text, tabSize);
+      break;
+    }
+  }
+
+  let nextColumns: number[] = [];
+  for (let current = lineNumber + 1; current <= state.doc.lines; current += 1) {
+    const text = state.doc.line(current).text;
+    if (text.trim().length > 0) {
+      nextColumns = getIndentGuideColumns(text, tabSize);
+      break;
+    }
+  }
+
+  if (!previousColumns.length) {
+    return nextColumns;
+  }
+  if (!nextColumns.length) {
+    return previousColumns;
+  }
+  return previousColumns.length <= nextColumns.length ? previousColumns : nextColumns;
+}
+
+function createLineBackgroundStyle(
+  text: string,
+  options: EditorDisplayOptions,
+  tabSize: number,
+  isLastLine: boolean,
+  indentGuideColumns = getIndentGuideColumns(text, tabSize)
+) {
   const images: string[] = [];
   const positions: string[] = [];
   const sizes: string[] = [];
@@ -180,10 +214,10 @@ function createLineBackgroundStyle(text: string, options: EditorDisplayOptions, 
   };
 
   if (options.showIndentGuides) {
-    getIndentGuideColumns(text, tabSize).forEach((column) => {
+    indentGuideColumns.forEach((column) => {
       addLayer(
         "linear-gradient(var(--indent-guide-color), var(--indent-guide-color))",
-        `calc(${column}ch - 1px) 0`,
+        `${column}ch 0`,
         "1px 100%"
       );
     });
@@ -259,7 +293,10 @@ function createDisplayBackgroundDecorations(view: EditorView, options: EditorDis
           line.text,
           options,
           view.state.tabSize,
-          line.number === view.state.doc.lines
+          line.number === view.state.doc.lines,
+          line.text.trim().length === 0
+            ? getBlankLineIndentGuideColumns(view.state, line.number, view.state.tabSize)
+            : undefined
         );
         if (style) {
           builder.add(line.from, line.from, Decoration.line({

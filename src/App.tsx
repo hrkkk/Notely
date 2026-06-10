@@ -35,7 +35,6 @@ import {
   openFileWithEncoding,
   openFilesByPath as fetchFilesByPath,
   readCustomLanguagesConfig,
-  relativePath,
   revealInFileManager,
   saveFileDialog,
   setWindowTitle,
@@ -143,6 +142,7 @@ export default function App() {
     showTabs: false,
     showIndentGuides: false
   });
+  const [languageReloadFeedback, setLanguageReloadFeedback] = useState("");
   const [editorZoom, setEditorZoom] = useState(100);
   const [cursor, setCursor] = useState(0);
   const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
@@ -558,19 +558,6 @@ export default function App() {
     }
   }, []);
 
-  const copyRelativePath = useCallback(async (tab: DocumentTab) => {
-    if (!tab.path) {
-      setStatus("当前标签页没有文件路径");
-      return;
-    }
-    try {
-      const path = await relativePath(tab.path);
-      await copyText(path, "已复制相对路径");
-    } catch (error) {
-      setStatus(`复制失败：${String(error)}`);
-    }
-  }, [copyText]);
-
   const revealTabInFileManager = useCallback(async (tab: DocumentTab) => {
     if (!tab.path) {
       setStatus("当前标签页没有文件路径");
@@ -620,13 +607,23 @@ export default function App() {
     setStatus("已撤销");
   }, [activeId, cursor]);
 
-  const reloadCustomLanguages = useCallback(async () => {
+  const reloadCustomLanguages = useCallback(async (showFeedback = false) => {
+    if (showFeedback) {
+      setLanguageReloadFeedback("正在重新加载...");
+    }
     try {
       const raw = await readCustomLanguagesConfig();
       const next = parseCustomLanguages(raw);
       setCustomLanguages(next);
+      if (showFeedback) {
+        setLanguageReloadFeedback(`已重新加载 ${next.length} 个自定义语言`);
+        window.setTimeout(() => setLanguageReloadFeedback(""), 2400);
+      }
       setStatus(`已加载 ${next.length} 个自定义语言`);
     } catch (error) {
+      if (showFeedback) {
+        setLanguageReloadFeedback(`重新加载配置失败：${String(error)}`);
+      }
       setStatus(`加载自定义语言失败：${String(error)}`);
     }
   }, []);
@@ -1755,8 +1752,7 @@ export default function App() {
            <button onClick={() => { closeAllTabs(); setTabContextMenu(null); }}>全部关闭</button>
            <div className="context-menu-separator" />
            <button onClick={() => { void saveTabAs(tab); setTabContextMenu(null); }}>另存为</button>
-           <button disabled={!tab.path} onClick={() => { void copyRelativePath(tab); setTabContextMenu(null); }}>复制相对路径</button>
-           <button disabled={!tab.path} onClick={() => { void copyText(tab.path ?? "", "已复制绝对路径"); setTabContextMenu(null); }}>复制绝对路径</button>
+           <button disabled={!tab.path} onClick={() => { void copyText(tab.path ?? "", "已复制文件路径"); setTabContextMenu(null); }}>复制文件路径</button>
            <button disabled={!tab.path} onClick={() => { void revealTabInFileManager(tab); setTabContextMenu(null); }}>在文件资源管理器中打开</button>
          </div>
        );
@@ -1990,9 +1986,12 @@ export default function App() {
                     <button className="primary-action" onClick={openCustomLanguagesConfig}>
                       打开自定义语言 JSON
                     </button>
-                    <button className="secondary-action" onClick={() => void reloadCustomLanguages()}>
+                    <button className="secondary-action" onClick={() => void reloadCustomLanguages(true)}>
                       重新加载配置
                     </button>
+                    {languageReloadFeedback ? (
+                      <span className="setting-inline-status">{languageReloadFeedback}</span>
+                    ) : null}
                   </div>
                 </div>
               )}
