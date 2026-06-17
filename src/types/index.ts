@@ -20,6 +20,7 @@ export type FileState = {
 export type DocumentTab = {
   id: string;
   name: string;
+  tabTitle?: string;
   path: string | null;
   content: string;
   savedContent: string;
@@ -81,7 +82,7 @@ export type HighlightRange = SearchMatch & {
 
 export type CodeMirrorEditorHandle = {
   focus: () => void;
-  setSelectionRange: (start: number, end: number) => void;
+  setSelectionRange: (start: number, end: number, focusEditor?: boolean) => void;
   getSelectionRange: () => { start: number; end: number };
   scrollToOffset: (offset: number) => void;
 };
@@ -116,6 +117,12 @@ export type CustomRegexHighlight = {
   backgroundColor?: string;
   fontWeight?: string;
   fontStyle?: string;
+  textDecoration?: string;
+  borderColor?: string;
+};
+
+export type CustomKeywordStyle = CSSProperties & {
+  prefixEnabled?: boolean;
 };
 
 export type LanguageDefinition = {
@@ -126,7 +133,8 @@ export type LanguageDefinition = {
   regexEnabled?: boolean;
   regex?: string;
   regexHighlights?: CustomRegexHighlight[];
-  keywordStyles?: Record<string, CSSProperties>;
+  keywordStyles?: Record<string, CustomKeywordStyle>;
+  keywordPrefixEnabled?: Record<string, boolean>;
   stringDelimiters?: string[];
   isCustom?: boolean;
   type?: "code" | "markup" | "css" | "json" | "markdown";
@@ -137,8 +145,16 @@ export type CustomKeywordGroup = {
   keyword1?: string;
   color?: string;
   keywordColor?: string;
-  style?: string;
+  backgroundColor?: string;
+  bgColor?: string;
+  fontWeight?: string;
+  weight?: string;
   fontStyle?: string;
+  style?: string;
+  textDecoration?: string;
+  decoration?: string;
+  borderColor?: string;
+  prefixEnabled?: boolean;
 };
 
 export type CustomLanguageConfig = {

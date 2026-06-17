@@ -35,6 +35,10 @@ async function createCustomLanguageExtension(language: LanguageDefinition): Prom
   };
 
   const keywords = new Set(language.keywords.map((keyword) => keyword.toLowerCase()));
+  const prefixKeywords = language.keywords
+    .filter((keyword) => language.keywordPrefixEnabled?.[keyword.toLowerCase()] ?? language.keywordStyles?.[keyword.toLowerCase()]?.prefixEnabled ?? false)
+    .sort((first, second) => second.length - first.length);
+  const styledKeywords = new Set(Object.keys(language.keywordStyles ?? {}).map((keyword) => keyword.toLowerCase()));
   const stringDelimiters = [...(language.stringDelimiters?.length ? language.stringDelimiters : ["'", '"'])]
     .filter(Boolean)
     .sort((first, second) => second.length - first.length);
@@ -96,8 +100,16 @@ async function createCustomLanguageExtension(language: LanguageDefinition): Prom
         return null;
       }
 
+      for (const keyword of prefixKeywords) {
+        if (stream.match(keyword, true, true)) {
+          stream.match(/[\p{L}\p{N}_$.-]*/u);
+          return styledKeywords.has(keyword.toLowerCase()) ? "variableName" : "keyword";
+        }
+      }
+
       if (stream.match(/[\p{L}_$][\p{L}\p{N}_$-]*/u)) {
-        return keywords.has(stream.current().toLowerCase()) ? "keyword" : "variableName";
+        const current = stream.current().toLowerCase();
+        return keywords.has(current) && !styledKeywords.has(current) ? "keyword" : "variableName";
       }
 
       stream.next();

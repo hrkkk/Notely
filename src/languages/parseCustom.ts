@@ -1,5 +1,4 @@
-import type { CSSProperties } from "react";
-import type { CustomKeywordGroup, CustomLanguageConfig, CustomRegexHighlight, LanguageDefinition } from "../types";
+import type { CustomKeywordGroup, CustomKeywordStyle, CustomLanguageConfig, CustomRegexHighlight, LanguageDefinition } from "../types";
 
 function normalizeWords(value: string) {
   return value
@@ -21,50 +20,61 @@ function normalizeExtensionValue(value: string[] | string | undefined) {
     : normalizeExtensions(value);
 }
 
-function keywordStyleFromText(_value: string | undefined, color: string | undefined): CSSProperties {
-  return {
-    color: color || undefined
+function keywordStyleFromGroup(group: CustomKeywordGroup): CustomKeywordStyle {
+  const style: CustomKeywordStyle = {
+    color: group.color ?? group.keywordColor ?? undefined,
+    backgroundColor: group.backgroundColor ?? group.bgColor ?? undefined,
+    fontWeight: group.fontWeight ?? group.weight ?? undefined,
+    fontStyle: group.fontStyle ?? group.style ?? undefined,
+    textDecoration: group.textDecoration ?? group.decoration ?? undefined,
+    borderColor: group.borderColor ?? undefined,
+    prefixEnabled: group.prefixEnabled ?? false
   };
+
+  return Object.fromEntries(Object.entries(style).filter(([, value]) => value !== undefined && value !== "")) as CustomKeywordStyle;
 }
 
 function normalizeKeywordGroups(value: CustomLanguageConfig) {
   const groups = (value.keywordGroups ?? []) as CustomKeywordGroup[];
-  const keywordStyles: Record<string, CSSProperties> = {};
+  const keywordStyles: Record<string, CustomKeywordStyle> = {};
+  const keywordPrefixEnabled: Record<string, boolean> = {};
   const keywords: string[] = [];
 
-  if (Array.isArray(groups)) {
-    groups.forEach((group) => {
-      const keywordText = group.keywords ?? group.keyword1 ?? "";
-      const color = group.color ?? group.keywordColor;
-      const style = keywordStyleFromText(group.style ?? group.fontStyle, color);
-      normalizeWords(keywordText).forEach((keyword) => {
-        keywords.push(keyword);
-        keywordStyles[keyword.toLowerCase()] = style;
-      });
+  const addGroup = (group: CustomKeywordGroup) => {
+    const keywordText = group.keywords ?? group.keyword1 ?? "";
+    const style = keywordStyleFromGroup(group);
+    normalizeWords(keywordText).forEach((keyword) => {
+      const key = keyword.toLowerCase();
+      keywords.push(keyword);
+      keywordStyles[key] = style;
+      keywordPrefixEnabled[key] = style.prefixEnabled ?? false;
     });
+  };
+
+  if (Array.isArray(groups)) {
+    groups.forEach(addGroup);
   }
 
   if (typeof value.keywords === "string") {
-    keywords.push(...normalizeWords(value.keywords));
+    normalizeWords(value.keywords).forEach((keyword) => {
+      keywords.push(keyword);
+      keywordPrefixEnabled[keyword.toLowerCase()] = false;
+    });
   } else if (Array.isArray(value.keywords)) {
     if (value.keywords.every((item) => typeof item === "string")) {
-      keywords.push(...(value.keywords as string[]).flatMap((item) => normalizeWords(item)));
-    } else {
-      (value.keywords as CustomKeywordGroup[]).forEach((group) => {
-        const keywordText = group.keywords ?? group.keyword1 ?? "";
-        const color = group.color ?? group.keywordColor;
-        const style = keywordStyleFromText(group.style ?? group.fontStyle, color);
-        normalizeWords(keywordText).forEach((keyword) => {
-          keywords.push(keyword);
-          keywordStyles[keyword.toLowerCase()] = style;
-        });
+      (value.keywords as string[]).flatMap((item) => normalizeWords(item)).forEach((keyword) => {
+        keywords.push(keyword);
+        keywordPrefixEnabled[keyword.toLowerCase()] = false;
       });
+    } else {
+      (value.keywords as CustomKeywordGroup[]).forEach(addGroup);
     }
   }
 
   return {
     keywords: Array.from(new Set(keywords)),
-    keywordStyles
+    keywordStyles,
+    keywordPrefixEnabled
   };
 }
 
@@ -83,7 +93,9 @@ function normalizeRegexHighlights(value: CustomLanguageConfig) {
       color: highlight.color,
       backgroundColor: highlight.backgroundColor,
       fontWeight: highlight.fontWeight,
-      fontStyle: highlight.fontStyle
+      fontStyle: highlight.fontStyle,
+      textDecoration: highlight.textDecoration,
+      borderColor: highlight.borderColor
     }));
 }
 
@@ -160,6 +172,7 @@ function parseCustomLanguages(raw: string): LanguageDefinition[] {
           keywords: keywordConfig.keywords,
           regexHighlights,
           keywordStyles: keywordConfig.keywordStyles,
+          keywordPrefixEnabled: keywordConfig.keywordPrefixEnabled,
           isCustom: true,
           regexEnabled: language.regexEnabled ?? language.enableRegex ?? false,
           regex,

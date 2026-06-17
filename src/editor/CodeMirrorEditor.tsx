@@ -6,7 +6,7 @@ import { highlightSelectionMatches } from "@codemirror/search";
 import { CSSProperties, WheelEvent, forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { getLanguageExtensions } from "../languages/extensions";
 import { createSearchDecorations } from "../search/decorations";
-import type { CodeMirrorEditorHandle, CodeMirrorEditorProps, CustomRegexHighlight, EditorDisplayOptions, LanguageDefinition } from "../types";
+import type { CodeMirrorEditorHandle, CodeMirrorEditorProps, CustomKeywordStyle, CustomRegexHighlight, EditorDisplayOptions, LanguageDefinition } from "../types";
 
 class InlineSymbolWidget extends WidgetType {
   constructor(private readonly symbol: string, private readonly className: string) {
@@ -336,26 +336,79 @@ function displayBackgroundsExtension(options: EditorDisplayOptions) {
   });
 }
 
-function createStyleAttribute(highlight: CustomRegexHighlight) {
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function createStyleAttribute(highlight: CustomRegexHighlight | CustomKeywordStyle | CSSProperties) {
   const styles = [
     highlight.color ? `color: ${highlight.color}` : "",
     highlight.backgroundColor ? `background-color: ${highlight.backgroundColor}` : "",
     highlight.backgroundColor ? "border-radius: 2px" : "",
     highlight.fontWeight ? `font-weight: ${highlight.fontWeight}` : "",
-    highlight.fontStyle ? `font-style: ${highlight.fontStyle}` : ""
+    highlight.fontStyle ? `font-style: ${highlight.fontStyle}` : "",
+    highlight.textDecoration ? `text-decoration: ${highlight.textDecoration}` : "",
+    highlight.borderColor ? `box-shadow: inset 0 -1px 0 ${highlight.borderColor}` : ""
   ].filter(Boolean);
   return styles.join("; ");
+}
+
+function keywordHighlightStyle(style: CustomKeywordStyle | undefined): CustomKeywordStyle {
+  return {
+    color: "#8f3fb0",
+    ...style
+  };
+}
+
+function createCustomKeywordRegex(keyword: string, prefixEnabled: boolean) {
+  const escaped = escapeRegExp(keyword);
+  const wordBoundary = "[\\p{L}\\p{N}_$-]";
+  const prefixTail = "[\\p{L}\\p{N}_$.-]*";
+  const pattern = prefixEnabled
+    ? `(?<!${wordBoundary})${escaped}${prefixTail}`
+    : `(?<!${wordBoundary})${escaped}(?!${wordBoundary})`;
+  return new RegExp(pattern, "giu");
 }
 
 function createCustomRegexDecorations(state: EditorState, language: LanguageDefinition) {
   const builder = new RangeSetBuilder<Decoration>();
   const highlights = language.regexHighlights ?? [];
-  if (!language.isCustom || highlights.length === 0) {
+  const keywordEntries = language.keywords
+    .map((keyword) => {
+      const key = keyword.toLowerCase();
+      return {
+        keyword,
+        prefixEnabled: language.keywordPrefixEnabled?.[key] ?? language.keywordStyles?.[key]?.prefixEnabled ?? false,
+        style: keywordHighlightStyle(language.keywordStyles?.[key])
+      };
+    })
+    .filter(({ keyword }) => keyword.length > 0);
+  if (!language.isCustom || (highlights.length === 0 && keywordEntries.length === 0)) {
     return builder.finish();
   }
 
   const content = state.doc.toString();
   const entries: Array<{ from: number; to: number; decoration: Decoration }> = [];
+
+  keywordEntries.forEach(({ keyword, prefixEnabled, style }) => {
+    const styleAttribute = createStyleAttribute(style);
+    const regex = createCustomKeywordRegex(keyword, prefixEnabled);
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(content))) {
+      if (match.index >= regex.lastIndex) {
+        regex.lastIndex = match.index + 1;
+      }
+      entries.push({
+        from: match.index,
+        to: match.index + match[0].length,
+        decoration: Decoration.mark({
+          class: "cm-customKeywordHighlight",
+          attributes: { style: styleAttribute }
+        })
+      });
+    }
+  });
+
   highlights.forEach((highlight) => {
     if (!highlight.pattern) {
       return;
@@ -469,7 +522,7 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
 
   useImperativeHandle(ref, () => ({
     focus: () => viewRef.current?.focus(),
-    setSelectionRange: (start, end) => {
+    setSelectionRange: (start, end, focusEditor = true) => {
       const view = viewRef.current;
       if (!view) {
         return;
@@ -478,7 +531,9 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
       const safeEnd = Math.max(0, Math.min(view.state.doc.length, end));
       view.dispatch({ selection: { anchor: safeStart, head: safeEnd }, scrollIntoView: true });
       cursorRef.current(safeEnd);
-      view.focus();
+      if (focusEditor) {
+        view.focus();
+      }
     },
     getSelectionRange: () => {
       const selection = viewRef.current?.state.selection.main;

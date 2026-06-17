@@ -18,6 +18,7 @@ body,
   width: 100%;
   height: 100%;
   margin: 0;
+  background: #f4f6f8;
 }
 
 button,
@@ -61,44 +62,11 @@ button {
 }
 
 .app-mark {
-  position: relative;
-  display: inline-grid;
-  align-content: center;
-  justify-items: center;
-  gap: 4px;
+  display: block;
   width: 26px;
   height: 26px;
   border-radius: 8px;
-  background: linear-gradient(145deg, #f8fafc, #dbe5ee);
-  border: 1px solid #b8c6d2;
-  box-shadow: inset 0 -1px 0 rgb(255 255 255 / 70%);
-}
-
-.app-mark::before {
-  content: "";
-  position: absolute;
-  left: 7px;
-  top: 5px;
-  width: 12px;
-  height: 16px;
-  border-radius: 2px;
-  background: #ffffff;
-  border: 1px solid #8ea0af;
-}
-
-.app-mark-line {
-  position: relative;
-  z-index: 1;
-  width: 9px;
-  height: 1px;
-  border-radius: 999px;
-  background: #5d6b78;
-}
-
-.app-mark-line.short {
-  width: 6px;
-  justify-self: start;
-  margin-left: 8px;
+  object-fit: cover;
 }
 
 .toolbar {
@@ -130,6 +98,21 @@ button {
 .toolbar button:disabled {
   color: #a6adb4;
   background: transparent;
+}
+
+.app-version-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid #c9d6e2;
+  border-radius: 999px;
+  background: #eef4fb;
+  color: #52606b;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .languagebar {
@@ -730,19 +713,10 @@ button {
   box-shadow: 0 0 0 1px #e39b24 inset;
 }
 
-.cm-editor-host .cm-customRegexHighlight {
+.cm-editor-host .cm-customRegexHighlight,
+.cm-editor-host .cm-customKeywordHighlight {
   border-radius: 2px;
-  color: #0f766e;
-  background: #ccfbf1;
 }
-
-.cm-editor-host .cm-customRegexHighlight {
-  border-radius: 2px;
-  color: #0f766e;
-  background: #ccfbf1;
-}
-
-
 
 .search-widget {
   position: absolute;
@@ -1039,9 +1013,9 @@ button {
 .language-picker-list button {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 2px;
-  min-height: 40px;
-  padding: 6px 9px;
+  gap: 4px;
+  min-height: 50px;
+  padding: 8px 9px;
   border-radius: 5px;
   background: transparent;
   color: #202428;
@@ -1071,8 +1045,34 @@ button {
   overflow: hidden;
   color: #7d8790;
   font-size: 11px;
+  line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.language-picker-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.language-picker-name > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.language-picker-name em {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #e7f0ff;
+  color: #2d6cdf;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
 }
 
 .language-picker-empty {

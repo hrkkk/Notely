@@ -517,6 +517,29 @@ fn write_file(path: String, content: String, encoding: String, line_ending: Stri
 }
 
 #[tauri::command]
+fn rename_file(path: String, new_name: String) -> Result<FilePayload, AppError> {
+    let path = PathBuf::from(path);
+    let new_name = new_name.trim();
+    if new_name.is_empty() || new_name.contains('/') || new_name.contains('\\') {
+        return Err(AppError::Codec("Invalid file name".to_string()));
+    }
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::Codec("Cannot rename a path without parent directory".to_string()))?;
+    let new_path = parent.join(new_name);
+    if new_path == path {
+        return read_text_file(new_path, None);
+    }
+    if new_path.exists() {
+        return Err(AppError::Codec("Target file already exists".to_string()));
+    }
+
+    fs::rename(&path, &new_path)?;
+    read_text_file(new_path, None)
+}
+
+#[tauri::command]
 fn read_custom_languages_config() -> Result<String, AppError> {
     let path = ensure_custom_languages_config()?;
     Ok(fs::read_to_string(path)?)
@@ -630,6 +653,7 @@ pub fn run() {
             get_file_state,
             save_file_dialog,
             write_file,
+            rename_file,
             read_custom_languages_config,
             open_custom_languages_config,
             reveal_in_file_manager,

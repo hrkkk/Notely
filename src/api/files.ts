@@ -48,6 +48,10 @@ export async function openFileWithEncoding(path: string, encoding: string) {
   return invoke<FilePayload>("open_file_with_encoding", { path, encoding });
 }
 
+export async function renameFile(path: string, newName: string) {
+  return invoke<FilePayload>("rename_file", { path, newName });
+}
+
 export async function readCustomLanguagesConfig() {
   return invoke<string>("read_custom_languages_config");
 }

@@ -91,6 +91,7 @@ function loadInitialSession(): SessionPayload {
     const tabs = Array.isArray(parsed.tabs)
         ? parsed.tabs.filter(isValidTab).map((tab) => ({
           ...tab,
+          tabTitle: tab.tabTitle || undefined,
           path: tab.path ?? null,
           language: tab.language || "Plain Text",
           encoding: tab.encoding || "UTF-8",
