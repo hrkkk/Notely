@@ -113,61 +113,7 @@ fn custom_languages_config_path() -> Result<PathBuf, AppError> {
 fn ensure_custom_languages_config() -> Result<PathBuf, AppError> {
     let path = custom_languages_config_path()?;
     if !path.exists() {
-        let template = r##"// Custom language that matches CMakeLists.txt by file name.
-// Keep regexEnabled true because CMakeLists.txt uses the .txt extension.
-[
-  {
-    "name": "CMake",
-    "extensions": "cmake",
-    "regexEnabled": true,
-    "regexPattern": "^CMakeLists\\.txt$|.*\\.cmake$",
-    "lineComment": "#",
-    "keywordGroups": [
-      {
-        "keywords": "cmake_minimum_required project add_executable add_library target_link_libraries target_include_directories target_compile_definitions target_compile_options set option include find_package if elseif else endif foreach endforeach function endfunction macro endmacro message install",
-        "color": "#8f3fb0"
-      },
-      {
-        "keywords": "ON OFF TRUE FALSE YES NO",
-        "color": "#b25f00"
-      }
-    ],
-    "regexHighlights": [
-      {
-        "pattern": "\\\\$\\\\{[A-Za-z_][A-Za-z0-9_]*\\\\}",
-        "color": "#0f766e",
-        "backgroundColor": "#ccfbf1"
-      }
-    ]
-  },
-  {
-    "name": "MyLanguage",
-    "extensions": "my mylang",
-    "regexEnabled": false,
-    "regexPattern": "^example\\.my$",
-    "lineComment": "//",
-    "blockStart": "/*",
-    "blockEnd": "*/",
-    "keywordGroups": [
-      {
-        "keywords": "if else function return",
-        "color": "#8f3fb0"
-      },
-      {
-        "keywords": "true false null",
-        "color": "#b25f00"
-      }
-    ],
-    "regexHighlights": [
-      {
-        "pattern": "\\\\b[A-Z_]{2,}\\\\b",
-        "color": "#0f766e",
-        "backgroundColor": "#ccfbf1"
-      }
-    ]
-  }
-]
-"##;
+        let template = include_str!("../custom-languages.template.jsonc");
         fs::write(&path, template.as_bytes())?;
     }
     Ok(path)

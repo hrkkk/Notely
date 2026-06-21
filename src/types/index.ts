@@ -141,40 +141,28 @@ export type LanguageDefinition = {
 };
 
 export type CustomKeywordGroup = {
-  keywords?: string;
-  keyword1?: string;
+  keywords: string;
   color?: string;
-  keywordColor?: string;
   backgroundColor?: string;
-  bgColor?: string;
   fontWeight?: string;
-  weight?: string;
   fontStyle?: string;
-  style?: string;
   textDecoration?: string;
-  decoration?: string;
   borderColor?: string;
   prefixEnabled?: boolean;
 };
 
 export type CustomLanguageConfig = {
-  name?: string;
-  languageName?: string;
+  name: string;
   extensions?: string[] | string;
-  extension?: string;
   regexEnabled?: boolean;
-  enableRegex?: boolean;
   regex?: string;
-  regexPattern?: string;
   lineComment?: string;
   blockStart?: string;
-  blockCommentStart?: string;
   blockEnd?: string;
-  blockCommentEnd?: string;
-  keywords?: string[] | string | CustomKeywordGroup[];
+  stringDelimiters?: string[];
+  keywords?: string[] | string;
   keywordGroups?: CustomKeywordGroup[];
   regexHighlights?: CustomRegexHighlight[];
-  regexHighlight?: CustomRegexHighlight[];
 };
 
 export type CustomLanguageForm = {

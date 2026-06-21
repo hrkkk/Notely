@@ -1,0 +1,74 @@
+// 自定义语言配置模板。顶层必须是数组，可放置多个语言对象。
+// 所有字段均使用正式英文名称；删除不需要的可选字段即可。
+[
+  {
+    // 必填：语言显示名称。string
+    "name": "MyLanguage",
+
+    // 可选：文件扩展名，不含点号。string（空格或逗号分隔）或 string[]
+    "extensions": ["my", "mylang"],
+
+    // 可选：是否使用 regex 对完整文件名进行匹配。boolean：true | false，默认 false
+    "regexEnabled": true,
+
+    // 可选：用于匹配完整文件名的 JavaScript 正则表达式源码。string
+    "regex": "^example\\.my$",
+
+    // 可选：单行注释符。string
+    "lineComment": "//",
+
+    // 可选：块注释起止符。string；应同时提供这两个字段
+    "blockStart": "/*",
+    "blockEnd": "*/",
+
+    // 可选：字符串起止定界符。string[]，默认 ["'", "\""]
+    "stringDelimiters": ["'", "\"", "`"],
+
+    // 可选：无自定义样式的关键字。string（空格或逗号分隔）或 string[]
+    "keywords": ["while", "break", "continue"],
+
+    // 可选：带样式的关键字组。array
+    "keywordGroups": [
+      {
+        // 必填：该组关键字。string（空格或逗号分隔）
+        "keywords": "if else function return",
+
+        // 以下颜色字段接受任意 CSS 颜色：#RGB、#RRGGBB、rgb(...)、命名颜色等
+        "color": "#8f3fb0",
+        "backgroundColor": "transparent",
+        "borderColor": "transparent",
+
+        // CSS font-weight：normal | bold | 100..900
+        "fontWeight": "bold",
+
+        // CSS font-style：normal | italic | oblique
+        "fontStyle": "normal",
+
+        // CSS text-decoration，例如 none | underline | line-through | underline wavy
+        "textDecoration": "none",
+
+        // true：关键字匹配后继续包含字母、数字、_、$、.、-；false：仅匹配完整关键字
+        "prefixEnabled": false
+      }
+    ],
+
+    // 可选：使用正则表达式高亮任意文本。array
+    "regexHighlights": [
+      {
+        // 必填：JavaScript 正则表达式源码。程序使用 g、s、u 标志
+        "pattern": "\\b[A-Z_]{2,}\\b",
+
+        // 可选：高亮第几个捕获组。integer：0 为完整匹配，1 及以上为对应捕获组
+        "captureGroup": 0,
+
+        // 样式字段的参数范围与 keywordGroups 中相同
+        "color": "#0f766e",
+        "backgroundColor": "#ccfbf1",
+        "borderColor": "transparent",
+        "fontWeight": "normal",
+        "fontStyle": "normal",
+        "textDecoration": "none"
+      }
+    ]
+  }
+]

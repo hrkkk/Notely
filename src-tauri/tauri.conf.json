@@ -1,33 +1,91 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Notely",
-  "version": "0.1.0",
-  "identifier": "com.notely.editor",
-  "build": {
-    "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
-    "frontendDist": "../dist"
-  },
-  "app": {
-    "windows": [
-      {
-        "title": "Notely",
-        "width": 1100,
-        "height": 760,
-        "minWidth": 720,
-        "minHeight": 480,
-        "maximized": true,
-        "resizable": true
-      }
-    ],
-    "security": {
-      "csp": null
-    }
-  },
-  "bundle": {
-    "active": true,
-    "targets": ["msi"],
-    "icon": ["icons/icon.png", "icons/icon.ico"]
-  }
+    "$schema":  "https://schema.tauri.app/config/2",
+    "productName":  "Notely",
+    "version":  "0.1.0",
+    "identifier":  "com.notely.editor",
+    "build":  {
+                  "beforeDevCommand":  "npm run dev",
+                  "devUrl":  "http://localhost:1420",
+                  "beforeBuildCommand":  "npm run build",
+                  "frontendDist":  "../dist"
+              },
+    "app":  {
+                "windows":  [
+                                {
+                                    "title":  "Notely",
+                                    "width":  1100,
+                                    "height":  760,
+                                    "minWidth":  720,
+                                    "minHeight":  480,
+                                    "maximized":  true,
+                                    "resizable":  true,
+                                    "backgroundColor":  "#f4f6f8"
+                                }
+                            ],
+                "security":  {
+                                 "csp":  null
+                             }
+            },
+    "bundle":  {
+                   "active":  true,
+                   "targets":  [
+                                   "msi"
+                               ],
+                   "icon":  [
+                                "icons/icon.png",
+                                "icons/generated/icon.ico"
+                            ],
+                   "fileAssociations":  [
+                                            {
+                                                "ext":  [
+                                                            "txt",
+                                                            "log",
+                                                            "js",
+                                                            "jsx",
+                                                            "mjs",
+                                                            "cjs",
+                                                            "ts",
+                                                            "tsx",
+                                                            "py",
+                                                            "pyw",
+                                                            "java",
+                                                            "c",
+                                                            "cpp",
+                                                            "cc",
+                                                            "cxx",
+                                                            "hpp",
+                                                            "hxx",
+                                                            "h",
+                                                            "cs",
+                                                            "rs",
+                                                            "go",
+                                                            "sh",
+                                                            "bash",
+                                                            "zsh",
+                                                            "ps1",
+                                                            "sql",
+                                                            "html",
+                                                            "htm",
+                                                            "xml",
+                                                            "svg",
+                                                            "css",
+                                                            "scss",
+                                                            "less",
+                                                            "json",
+                                                            "yaml",
+                                                            "yml",
+                                                            "md",
+                                                            "markdown",
+                                                            "rb",
+                                                            "php",
+                                                            "lua",
+                                                            "kt",
+                                                            "kts"
+                                                        ],
+                                                "name":  "Notely Document",
+                                                "description":  "Notely Text Document",
+                                                "role":  "Editor"
+                                            }
+                                        ]
+               }
 }

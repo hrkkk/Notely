@@ -19,7 +19,9 @@ import {
 import {
   CSSProperties,
   MouseEvent,
+  Suspense,
   WheelEvent,
+  lazy,
   useCallback,
   useEffect,
   useMemo,
@@ -35,6 +37,7 @@ import {
   openFileWithEncoding,
   openFilesByPath as fetchFilesByPath,
   readCustomLanguagesConfig,
+  renameFile,
   revealInFileManager,
   saveFileDialog,
   setWindowTitle,
@@ -49,7 +52,6 @@ import {
   minEditorZoom,
   editorZoomStep
 } from "./constants";
-import CodeMirrorEditor from "./editor/CodeMirrorEditor";
 import { builtInLanguages } from "./languages/builtIn";
 import { detectLanguage, getLanguageDefinition } from "./languages/detect";
 import { parseCustomLanguages } from "./languages/parseCustom";
@@ -97,6 +99,9 @@ import type {
 } from "./types";
 import { createId } from "./utils/id";
 import { buildLineStarts, getLineIndexAtOffset, lineAndColumnFromStarts } from "./utils/text";
+import appIcon from "../src-tauri/icons/icon.png";
+
+const CodeMirrorEditor = lazy(() => import("./editor/CodeMirrorEditor"));
 
 export default function App() {
   const [initialSession] = useState(() => loadInitialSession());
@@ -157,7 +162,7 @@ export default function App() {
   const activeTab = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
   const isDirty = isTabDirty(activeTab);
   const hasUnsavedTabs = tabs.some(isTabDirty);
-  const languageOptions = useMemo(() => [...builtInLanguages, ...customLanguages], [customLanguages]);
+  const languageOptions = useMemo(() => [...customLanguages, ...builtInLanguages], [customLanguages]);
   const filteredLanguageOptions = useMemo(() => {
     const value = languageSearch.trim().toLowerCase();
     if (!value) {
@@ -570,6 +575,50 @@ export default function App() {
       setStatus(`打开失败：${String(error)}`);
     }
   }, []);
+
+  const renameTab = useCallback((tab: DocumentTab) => {
+    const nextTitle = window.prompt("重命名标签页", tab.tabTitle ?? tab.name);
+    if (nextTitle === null) {
+      return;
+    }
+    const title = nextTitle.trim();
+    if (!title) {
+      setStatus("标签页名称不能为空");
+      return;
+    }
+    setTabs((current) => current.map((item) => item.id === tab.id ? { ...item, tabTitle: title } : item));
+    setStatus(`标签页已重命名为 ${title}`);
+  }, []);
+
+  const renameTabFile = useCallback(async (tab: DocumentTab) => {
+    if (!tab.path) {
+      setStatus("当前标签页没有文件路径");
+      return;
+    }
+    const nextName = window.prompt("重命名文件", tab.name);
+    if (nextName === null) {
+      return;
+    }
+    const name = nextName.trim();
+    if (!name) {
+      setStatus("文件名不能为空");
+      return;
+    }
+    try {
+      const file = await renameFile(tab.path, name);
+      setTabs((current) => current.map((item) => item.id === tab.id ? {
+        ...item,
+        name: file.name,
+        tabTitle: file.name,
+        path: file.path,
+        ...fileStateFromPayload(file),
+        language: detectLanguage(file.name, customLanguages)
+      } : item));
+      setStatus(`文件已重命名为 ${file.name}`);
+    } catch (error) {
+      setStatus(`重命名失败：${String(error)}`);
+    }
+  }, [customLanguages]);
 
   const undo = useCallback(() => {
     let restoredCursor = 0;
@@ -1273,15 +1322,21 @@ export default function App() {
     }
 
     startupFilesLoadedRef.current = true;
-    const timer = window.setTimeout(async () => {
-      try {
-        const files = await getStartupFiles();
-        openFilesFromPayloads(files);
-      } catch (error) {
-        setStatus(`Startup file open failed: ${String(error)}`);
-      }
-    }, 0);
-    return () => window.clearTimeout(timer);
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(async () => {
+        try {
+          const files = await getStartupFiles();
+          openFilesFromPayloads(files);
+        } catch (error) {
+          setStatus(`Startup file open failed: ${String(error)}`);
+        }
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
   }, [openFilesFromPayloads]);
 
   useEffect(() => {
@@ -1395,10 +1450,7 @@ export default function App() {
     <main className="app-shell">
       <header className="topbar">
         <div className="window-title">
-          <span className="app-mark" aria-hidden="true">
-            <span className="app-mark-line" />
-            <span className="app-mark-line short" />
-          </span>
+          <img className="app-mark" src={appIcon} alt="" aria-hidden="true" />
           <span title={activeTab.path ?? activeTab.name}>{activeTab.name}</span>
         </div>
         <div className="toolbar" aria-label="文件操作">
@@ -1520,6 +1572,13 @@ export default function App() {
             替换
           </button>
         </div>
+        <span
+          className="app-version-badge"
+          aria-label="当前软件版本"
+          title="当前软件版本"
+        >
+          v.1.0
+        </span>
         <button
           className={wordWrap ? "toggle is-active" : "toggle"}
           title="自动换行"
@@ -1557,9 +1616,9 @@ export default function App() {
                 setActiveId(tab.id);
                 setTabContextMenu({ tabId: tab.id, x: event.clientX, y: event.clientY });
               }}
-              title={tab.path ? `${tab.name}\n${tab.path}` : tab.name}
+              title={tab.path ? `${tab.tabTitle ?? tab.name}\n${tab.path}` : (tab.tabTitle ?? tab.name)}
             >
-              <span className="tab-name">{dirty ? "• " : ""}{tab.name}</span>
+              <span className="tab-name">{dirty ? "• " : ""}{tab.tabTitle ?? tab.name}</span>
               <span
                 className="tab-close"
                 role="button"
@@ -1579,23 +1638,25 @@ export default function App() {
 
       <section className={wordWrap ? "editor-wrap is-wrapping" : "editor-wrap"}>
           <div className="editor-pane">
-            <CodeMirrorEditor
-              ref={editorRef}
-              content={activeTab.content}
-              wordWrap={wordWrap}
-              displayOptions={displayOptions}
-              matches={matches}
-              currentMatchIndex={currentMatchIndex}
-              lineHighlights={lineHighlights}
-              fontStyle={editorFontStyle}
-              language={activeLanguage}
-              onChange={updateActiveContent}
-              onCursorChange={setCursor}
-              onCurrentMatchReset={() => setCurrentMatchIndex(-1)}
-              onLineHighlightsClear={() => setLineHighlights([])}
-              onOpenSearchWidget={openSearchWidget}
-              onZoomWheel={handleEditorWheel}
-            />
+            <Suspense fallback={<div className="editor-loading" aria-label="正在加载编辑器" />}>
+              <CodeMirrorEditor
+                ref={editorRef}
+                content={activeTab.content}
+                wordWrap={wordWrap}
+                displayOptions={displayOptions}
+                matches={matches}
+                currentMatchIndex={currentMatchIndex}
+                lineHighlights={lineHighlights}
+                fontStyle={editorFontStyle}
+                language={activeLanguage}
+                onChange={updateActiveContent}
+                onCursorChange={setCursor}
+                onCurrentMatchReset={() => setCurrentMatchIndex(-1)}
+                onLineHighlightsClear={() => setLineHighlights([])}
+                onOpenSearchWidget={openSearchWidget}
+                onZoomWheel={handleEditorWheel}
+              />
+            </Suspense>
             {isSearchWidgetOpen ? (
               <section className="search-widget" aria-label="Search and replace">
                 <div className="search-widget-row">
@@ -1750,6 +1811,9 @@ export default function App() {
            <button onClick={() => { closeOtherTabs(tab.id); setTabContextMenu(null); }}>关闭其他</button>
            <button onClick={() => { closeSavedTabs(); setTabContextMenu(null); }}>关闭已保存</button>
            <button onClick={() => { closeAllTabs(); setTabContextMenu(null); }}>全部关闭</button>
+           <div className="context-menu-separator" />
+           <button onClick={() => { renameTab(tab); setTabContextMenu(null); }}>重命名标签页</button>
+           <button disabled={!tab.path} onClick={() => { void renameTabFile(tab); setTabContextMenu(null); }}>重命名文件</button>
            <div className="context-menu-separator" />
            <button onClick={() => { void saveTabAs(tab); setTabContextMenu(null); }}>另存为</button>
            <button disabled={!tab.path} onClick={() => { void copyText(tab.path ?? "", "已复制文件路径"); setTabContextMenu(null); }}>复制文件路径</button>
@@ -1982,17 +2046,6 @@ export default function App() {
                       ))}
                     </select>
                   </label>
-                  <div className="setting-actions">
-                    <button className="primary-action" onClick={openCustomLanguagesConfig}>
-                      打开自定义语言 JSON
-                    </button>
-                    <button className="secondary-action" onClick={() => void reloadCustomLanguages(true)}>
-                      重新加载配置
-                    </button>
-                    {languageReloadFeedback ? (
-                      <span className="setting-inline-status">{languageReloadFeedback}</span>
-                    ) : null}
-                  </div>
                 </div>
               )}
             </div>
@@ -2116,13 +2169,30 @@ export default function App() {
                         setLanguageSearch("");
                       }}
                     >
-                      <span>{language.name}</span>
+                      <span className="language-picker-name">
+                        <span>{language.name}</span>
+                        {language.isCustom ? <em>自定义语言</em> : null}
+                      </span>
                       <small>{language.extensions.map((extension) => `.${extension}`).join(" ") || "无扩展名"}</small>
                     </button>
                   ))
                 ) : (
                   <span className="language-picker-empty">没有匹配的语言</span>
                 )}
+              </div>
+              <div className="language-picker-actions">
+                <button
+                  onClick={() => {
+                    setIsLanguagePickerOpen(false);
+                    void openCustomLanguagesConfig();
+                  }}
+                >
+                  打开配置文件
+                </button>
+                <button onClick={() => void reloadCustomLanguages(true)}>
+                  重新应用配置文件
+                </button>
+                {languageReloadFeedback ? <span>{languageReloadFeedback}</span> : null}
               </div>
             </div>
           ) : null}

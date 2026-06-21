@@ -22,11 +22,11 @@ function normalizeExtensionValue(value: string[] | string | undefined) {
 
 function keywordStyleFromGroup(group: CustomKeywordGroup): CustomKeywordStyle {
   const style: CustomKeywordStyle = {
-    color: group.color ?? group.keywordColor ?? undefined,
-    backgroundColor: group.backgroundColor ?? group.bgColor ?? undefined,
-    fontWeight: group.fontWeight ?? group.weight ?? undefined,
-    fontStyle: group.fontStyle ?? group.style ?? undefined,
-    textDecoration: group.textDecoration ?? group.decoration ?? undefined,
+    color: group.color,
+    backgroundColor: group.backgroundColor,
+    fontWeight: group.fontWeight,
+    fontStyle: group.fontStyle,
+    textDecoration: group.textDecoration,
     borderColor: group.borderColor ?? undefined,
     prefixEnabled: group.prefixEnabled ?? false
   };
@@ -41,7 +41,7 @@ function normalizeKeywordGroups(value: CustomLanguageConfig) {
   const keywords: string[] = [];
 
   const addGroup = (group: CustomKeywordGroup) => {
-    const keywordText = group.keywords ?? group.keyword1 ?? "";
+    const keywordText = group.keywords ?? "";
     const style = keywordStyleFromGroup(group);
     normalizeWords(keywordText).forEach((keyword) => {
       const key = keyword.toLowerCase();
@@ -66,8 +66,6 @@ function normalizeKeywordGroups(value: CustomLanguageConfig) {
         keywords.push(keyword);
         keywordPrefixEnabled[keyword.toLowerCase()] = false;
       });
-    } else {
-      (value.keywords as CustomKeywordGroup[]).forEach(addGroup);
     }
   }
 
@@ -79,7 +77,7 @@ function normalizeKeywordGroups(value: CustomLanguageConfig) {
 }
 
 function normalizeRegexHighlights(value: CustomLanguageConfig) {
-  const highlights = (value.regexHighlights ?? value.regexHighlight ?? []) as CustomRegexHighlight[];
+  const highlights = value.regexHighlights ?? [];
 
   if (!Array.isArray(highlights)) {
     return [];
@@ -161,9 +159,9 @@ function parseCustomLanguages(raw: string): LanguageDefinition[] {
 
     return parsed
       .map((language) => {
-        const name = language.name ?? language.languageName ?? "";
-        const extensions = normalizeExtensionValue(language.extensions ?? language.extension);
-        const regex = language.regex ?? language.regexPattern;
+        const name = language.name ?? "";
+        const extensions = normalizeExtensionValue(language.extensions);
+        const regex = language.regex;
         const keywordConfig = normalizeKeywordGroups(language);
         const regexHighlights = normalizeRegexHighlights(language);
         return {
@@ -174,12 +172,15 @@ function parseCustomLanguages(raw: string): LanguageDefinition[] {
           keywordStyles: keywordConfig.keywordStyles,
           keywordPrefixEnabled: keywordConfig.keywordPrefixEnabled,
           isCustom: true,
-          regexEnabled: language.regexEnabled ?? language.enableRegex ?? false,
+          regexEnabled: language.regexEnabled ?? false,
           regex,
+          stringDelimiters: Array.isArray(language.stringDelimiters)
+            ? language.stringDelimiters.filter((delimiter) => typeof delimiter === "string" && delimiter.length > 0)
+            : undefined,
           comment: {
             line: language.lineComment ?? undefined,
-            blockStart: language.blockStart ?? language.blockCommentStart ?? undefined,
-            blockEnd: language.blockEnd ?? language.blockCommentEnd ?? undefined
+            blockStart: language.blockStart ?? undefined,
+            blockEnd: language.blockEnd ?? undefined
           }
         };
       })
