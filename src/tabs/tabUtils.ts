@@ -5,6 +5,10 @@ import { detectLanguage } from "../languages/detect";
 import type { DocumentTab, FilePayload, FileState, LanguageDefinition, SessionPayload } from "../types";
 
 function isTabDirty(tab: DocumentTab) {
+  if (tab.isLoading) {
+    return false;
+  }
+
   return (
     tab.content !== tab.savedContent ||
     tab.encoding !== tab.savedEncoding ||
@@ -71,6 +75,27 @@ function createTabFromFile(file: FilePayload, customLanguages: LanguageDefinitio
   };
 }
 
+function createLoadingTab(path: string): DocumentTab {
+  const normalized = path.replace(/\\/g, "/");
+  const name = normalized.split("/").filter(Boolean).pop() ?? "Loading...";
+  return {
+    id: createId(),
+    name,
+    path,
+    isLoading: true,
+    content: "",
+    savedContent: "",
+    encoding: "UTF-8",
+    savedEncoding: "UTF-8",
+    lineEnding: "LF",
+    savedLineEnding: "LF",
+    diskModifiedMs: null,
+    diskSize: null,
+    language: "Plain Text",
+    history: []
+  };
+}
+
 function loadInitialSession(): SessionPayload {
   if (loadStartupPolicy() !== "restore") {
     const tab = createEmptyTab();
@@ -93,6 +118,7 @@ function loadInitialSession(): SessionPayload {
           ...tab,
           tabTitle: tab.tabTitle || undefined,
           path: tab.path ?? null,
+          isLoading: false,
           language: tab.language || "Plain Text",
           encoding: tab.encoding || "UTF-8",
           savedEncoding: tab.savedEncoding || tab.encoding || "UTF-8",
@@ -147,6 +173,7 @@ export {
   hasFileStateChanged,
   createEmptyTab,
   createTabFromFile,
+  createLoadingTab,
   loadInitialSession,
   saveSession
 };

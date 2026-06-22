@@ -22,6 +22,7 @@ export type DocumentTab = {
   name: string;
   tabTitle?: string;
   path: string | null;
+  isLoading?: boolean;
   content: string;
   savedContent: string;
   encoding: string;

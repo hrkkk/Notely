@@ -9,6 +9,10 @@ export async function openFileDialog() {
   return invoke<FilePayload | null>("open_file_dialog");
 }
 
+export async function openFilePathDialog() {
+  return invoke<string | null>("open_file_path_dialog");
+}
+
 export async function openFilesByPath(paths: string[]) {
   return invoke<FilePayload[]>("open_files_by_path", { paths });
 }

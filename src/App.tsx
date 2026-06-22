@@ -33,7 +33,7 @@ import {
   getStartupFiles,
   listSystemFonts,
   openCustomLanguagesConfig as fetchCustomLanguagesConfig,
-  openFileDialog,
+  openFilePathDialog,
   openFileWithEncoding,
   openFilesByPath as fetchFilesByPath,
   readCustomLanguagesConfig,
@@ -72,6 +72,7 @@ import {
 } from "./storage/settings";
 import {
   createEmptyTab,
+  createLoadingTab,
   createTabFromFile,
   fileStateFromPayload,
   hasFileStateChanged,
@@ -140,7 +141,7 @@ export default function App() {
   const [lineMenu, setLineMenu] = useState<LineMenuState>(null);
   const [moreMenu, setMoreMenu] = useState<MoreMenuState>(null);
   const [systemFonts, setSystemFonts] = useState<string[]>(fallbackFontFamilies);
-  const [wordWrap, setWordWrap] = useState(true);
+  const [wordWrap, setWordWrap] = useState(false);
   const [displayOptions, setDisplayOptions] = useState({
     showSpaces: false,
     showLineBreaks: false,
@@ -230,8 +231,10 @@ export default function App() {
 
     const nextTabs = files.map((file) => createTabFromFile(file, customLanguages));
     setTabs((current) => {
-      const existingPaths = new Set(current.map((tab) => tab.path).filter(Boolean));
-      const uniqueTabs = nextTabs.filter((tab) => !existingPaths.has(tab.path));
+      const existingByPath = new Map<string, DocumentTab>(
+        current.flatMap((tab) => tab.path ? [[tab.path, tab] as const] : [])
+      );
+      const uniqueTabs = nextTabs.filter((tab) => tab.path && (!existingByPath.has(tab.path) || existingByPath.get(tab.path)?.isLoading));
       if (!uniqueTabs.length) {
         const existing = current.find((tab) => tab.path === files[0].path);
         if (existing) {
@@ -248,7 +251,17 @@ export default function App() {
         current[0].savedContent.length === 0;
       setActiveId(uniqueTabs[0].id);
       setStatus(uniqueTabs.length === 1 ? `已打开 ${uniqueTabs[0].name}` : `已打开 ${uniqueTabs.length} 个文件`);
-      return onlyBlank ? uniqueTabs : [...current, ...uniqueTabs];
+      if (onlyBlank) {
+        return uniqueTabs;
+      }
+
+      const loadedByPath = new Map(uniqueTabs.map((tab) => [tab.path, tab]));
+      const replaced = current.map((tab) => tab.path && loadedByPath.has(tab.path) ? loadedByPath.get(tab.path)! : tab);
+      const replacedPaths = new Set(replaced.map((tab) => tab.path).filter(Boolean));
+      return [
+        ...replaced,
+        ...uniqueTabs.filter((tab) => !replacedPaths.has(tab.path))
+      ];
     });
   }, [customLanguages]);
 
@@ -258,59 +271,70 @@ export default function App() {
       return;
     }
 
+    const loadingTabs = uniquePaths.map(createLoadingTab);
+    setTabs((current) => {
+      const existingPaths = new Set(current.map((tab) => tab.path).filter(Boolean));
+      const pendingTabs = loadingTabs.filter((tab) => !existingPaths.has(tab.path));
+      const firstExisting = current.find((tab) => tab.path === uniquePaths[0]);
+      if (!pendingTabs.length) {
+        if (firstExisting) {
+          setActiveId(firstExisting.id);
+          setStatus(`已切换到 ${firstExisting.name}`);
+        }
+        return current;
+      }
+
+      const onlyBlank =
+        current.length === 1 &&
+        current[0].path === null &&
+        current[0].content.length === 0 &&
+        current[0].savedContent.length === 0;
+      setActiveId(pendingTabs[0].id);
+      setStatus(pendingTabs.length === 1 ? `正在打开 ${pendingTabs[0].name}...` : `正在打开 ${pendingTabs.length} 个文件...`);
+      return onlyBlank ? pendingTabs : [...current, ...pendingTabs];
+    });
+
     try {
       const files = await fetchFilesByPath(uniquePaths);
       openFilesFromPayloads(files);
     } catch (error) {
+      const failedPaths = new Set(uniquePaths);
+      setTabs((current) => current.map((tab) => (
+        tab.path && failedPaths.has(tab.path) && tab.isLoading
+          ? { ...tab, isLoading: false, content: "", savedContent: "" }
+          : tab
+      )));
       setStatus(`Open failed: ${String(error)}`);
     }
   }, [openFilesFromPayloads]);
 
   const openFile = useCallback(async () => {
     try {
-      const file = await openFileDialog();
-      if (!file) {
+      const path = await openFilePathDialog();
+      if (!path) {
         setStatus("已取消打开");
         return;
       }
 
-      const existing = tabs.find((tab) => tab.path === file.path);
+      const existing = tabs.find((tab) => tab.path === path);
       if (existing) {
         setActiveId(existing.id);
         setStatus(`已切换到 ${existing.name}`);
         return;
       }
 
-      const tab: DocumentTab = {
-        id: createId(),
-        name: file.name,
-        path: file.path,
-        content: file.content,
-        savedContent: file.content,
-        encoding: file.encoding,
-        savedEncoding: file.encoding,
-        lineEnding: file.line_ending,
-        savedLineEnding: file.line_ending,
-        ...fileStateFromPayload(file),
-        language: detectLanguage(file.name, customLanguages),
-        history: []
-      };
-      setTabs((current) => {
-        const onlyBlank =
-          current.length === 1 &&
-          current[0].path === null &&
-          current[0].content.length === 0 &&
-          current[0].savedContent.length === 0;
-        return onlyBlank ? [tab] : [...current, tab];
-      });
-      setActiveId(tab.id);
-      setStatus(`已打开 ${file.name}`);
+      await openFilesByPath([path]);
     } catch (error) {
       setStatus(`打开失败：${String(error)}`);
     }
-  }, [customLanguages, tabs]);
+  }, [openFilesByPath, tabs]);
 
   const saveTabAs = useCallback(async (tab: DocumentTab) => {
+    if (tab.isLoading) {
+      setStatus("文件仍在打开中");
+      return false;
+    }
+
     try {
       const file = await saveFileDialog(
         tab.path ?? tab.name,
@@ -347,6 +371,11 @@ export default function App() {
   const saveAs = useCallback(() => saveTabAs(activeTab), [activeTab, saveTabAs]);
 
   const save = useCallback(async () => {
+    if (activeTab.isLoading) {
+      setStatus("文件仍在打开中");
+      return false;
+    }
+
     if (!activeTab.path) {
       return saveAs();
     }
@@ -1188,7 +1217,10 @@ export default function App() {
 
   const stats = useMemo(() => {
     const lines = lineStarts.length;
-    const words = activeTab.content.trim() ? activeTab.content.trim().split(/\s+/).length : 0;
+    const shouldComputeWords = !activeTab.isLoading && activeTab.content.length <= 1_000_000;
+    const words = shouldComputeWords
+      ? (activeTab.content.trim() ? activeTab.content.trim().split(/\s+/).length : 0)
+      : "deferred";
     return {
       lines,
       words,
@@ -1429,6 +1461,10 @@ export default function App() {
   }, [activeTab?.name, isDirty]);
 
   useEffect(() => {
+    void getCurrentWindow().show();
+  }, []);
+
+  useEffect(() => {
     const appWindow = getCurrentWindow();
     let unlisten: (() => void) | undefined;
     void appWindow.onCloseRequested((event) => {
@@ -1464,10 +1500,10 @@ export default function App() {
           <button title="打开" onClick={() => void openFile()}>
             <FolderOpen size={17} />
           </button>
-          <button title="保存" onClick={() => void save()} disabled={!isDirty && Boolean(activeTab.path)}>
+          <button title="保存" onClick={() => void save()} disabled={activeTab.isLoading || (!isDirty && Boolean(activeTab.path))}>
             <Save size={17} />
           </button>
-          <button title="另存为" onClick={() => void saveAs()}>
+          <button title="另存为" onClick={() => void saveAs()} disabled={activeTab.isLoading}>
             <SaveAll size={17} />
           </button>
           <button
@@ -1581,7 +1617,7 @@ export default function App() {
           aria-label="当前软件版本"
           title="当前软件版本"
         >
-          v.1.0
+          v2.0
         </span>
         <button
           className={wordWrap ? "toggle is-active" : "toggle"}
@@ -1642,7 +1678,12 @@ export default function App() {
 
       <section className={wordWrap ? "editor-wrap is-wrapping" : "editor-wrap"}>
           <div className="editor-pane">
-            <Suspense fallback={<div className="editor-loading" aria-label="正在加载编辑器" />}>
+            {activeTab.isLoading ? (
+              <div className="editor-loading" aria-label="正在打开文件">
+                <span>正在打开 {activeTab.name}...</span>
+              </div>
+            ) : (
+            <Suspense fallback={<div className="editor-loading" aria-label="正在加载编辑器"><span>正在加载编辑器...</span></div>}>
               <CodeMirrorEditor
                 ref={editorRef}
                 content={activeTab.content}
@@ -1661,6 +1702,7 @@ export default function App() {
                 onZoomWheel={handleEditorWheel}
               />
             </Suspense>
+            )}
             {isSearchWidgetOpen ? (
               <section className="search-widget" aria-label="Search and replace">
                 <div className="search-widget-row">

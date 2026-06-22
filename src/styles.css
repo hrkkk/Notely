@@ -1233,7 +1233,18 @@ button {
 .language-picker-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.language-picker-actions button{width:100%;height:32px;border-radius:7px}.language-picker-actions span{grid-column:1/-1}
 
 .editor-loading {
+  display: grid;
+  place-items: center;
   width: 100%;
   height: 100%;
   background: #ffffff;
+  color: #66717d;
+  font-size: 13px;
+}
+
+.editor-loading span {
+  padding: 8px 12px;
+  border: 1px solid #dfe6ec;
+  border-radius: 6px;
+  background: #f7f9fb;
 }

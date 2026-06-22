@@ -373,6 +373,18 @@ fn open_file_dialog() -> Result<Option<FilePayload>, AppError> {
 }
 
 #[tauri::command]
+fn open_file_path_dialog() -> Result<Option<String>, AppError> {
+    let Some(path) = rfd::FileDialog::new()
+        .set_title("Open text file")
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
 fn open_file_with_encoding(path: String, encoding: String) -> Result<FilePayload, AppError> {
     read_text_file(PathBuf::from(path), Some(encoding))
 }
@@ -593,6 +605,7 @@ pub fn run() {
         }))
         .invoke_handler(tauri::generate_handler![
             open_file_dialog,
+            open_file_path_dialog,
             open_file_with_encoding,
             get_startup_files,
             open_files_by_path,
