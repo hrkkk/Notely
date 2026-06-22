@@ -664,6 +664,10 @@ export default function App() {
       const raw = await readCustomLanguagesConfig();
       const next = parseCustomLanguages(raw);
       setCustomLanguages(next);
+      setTabs((current) => current.map((tab) => tab.path ? {
+        ...tab,
+        language: detectLanguage(tab.name, next)
+      } : tab));
       if (showFeedback) {
         setLanguageReloadFeedback(`已重新加载 ${next.length} 个自定义语言`);
         window.setTimeout(() => setLanguageReloadFeedback(""), 2400);

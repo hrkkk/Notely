@@ -28,6 +28,9 @@
             },
     "bundle":  {
                    "active":  true,
+                   "resources":  {
+                                      "icons/file_logo.ico":  "file_logo.ico"
+                                  },
                    "targets":  [
                                    "msi"
                                ],
@@ -86,6 +89,16 @@
                                                 "description":  "Notely Text Document",
                                                 "role":  "Editor"
                                             }
-                                        ]
+                                        ],
+                   "windows":  {
+                                   "wix":  {
+                                               "fragmentPaths":  [
+                                                                      "wix/file-association-icons.wxs"
+                                                                  ],
+                                               "componentGroupRefs":  [
+                                                                          "NotelyFileAssociationIcons"
+                                                                      ]
+                                           }
+                               }
                }
 }

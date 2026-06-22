@@ -155,7 +155,7 @@ export type CustomLanguageConfig = {
   name: string;
   extensions?: string[] | string;
   regexEnabled?: boolean;
-  regex?: string;
+  regexPattern?: string;
   lineComment?: string;
   blockStart?: string;
   blockEnd?: string;

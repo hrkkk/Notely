@@ -161,7 +161,7 @@ function parseCustomLanguages(raw: string): LanguageDefinition[] {
       .map((language) => {
         const name = language.name ?? "";
         const extensions = normalizeExtensionValue(language.extensions);
-        const regex = language.regex;
+        const regex = language.regexPattern;
         const keywordConfig = normalizeKeywordGroups(language);
         const regexHighlights = normalizeRegexHighlights(language);
         return {
