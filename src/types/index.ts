@@ -82,6 +82,12 @@ export type HighlightRange = SearchMatch & {
   current?: boolean;
 };
 
+export type ColorMarker = {
+  id: string;
+  text: string;
+  color: string;
+};
+
 export type CodeMirrorEditorHandle = {
   focus: () => void;
   setSelectionRange: (start: number, end: number, focusEditor?: boolean) => void;
@@ -107,6 +113,7 @@ export type CodeMirrorEditorProps = {
   matches: SearchMatch[];
   currentMatchIndex: number;
   lineHighlights: SearchMatch[];
+  colorMarkers: ColorMarker[];
   fontStyle: CSSProperties;
   language: LanguageDefinition;
   onChange: (content: string) => void;
@@ -115,6 +122,7 @@ export type CodeMirrorEditorProps = {
   onLineHighlightsClear: () => void;
   onOpenSearchWidget: (mode: "search" | "replace") => void;
   onJumpToLine: () => void;
+  onEditorContextMenu: (x: number, y: number) => void;
   onViewStateChange: (state: EditorViewState) => void;
   onZoomWheel: (event: WheelEvent<HTMLDivElement>) => void;
 };

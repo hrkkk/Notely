@@ -82,6 +82,7 @@ import {
 } from "./tabs/tabUtils";
 import type {
   CodeMirrorEditorHandle,
+  ColorMarker,
   DocumentTab,
   EncodingAction,
   EditorViewState,
@@ -108,6 +109,25 @@ const CodeMirrorEditor = lazy(() => import("./editor/CodeMirrorEditor"));
 type PendingCloseTab = {
   tabId: string;
 } | null;
+
+const markerColors = [
+  { label: "黄色标记", value: "rgba(255, 213, 79, 0.55)" },
+  { label: "绿色标记", value: "rgba(102, 187, 106, 0.45)" },
+  { label: "蓝色标记", value: "rgba(66, 165, 245, 0.42)" },
+  { label: "粉色标记", value: "rgba(236, 64, 122, 0.38)" },
+  { label: "紫色标记", value: "rgba(171, 71, 188, 0.38)" }
+];
+
+function positionContextMenu(x: number, y: number, estimatedHeight = 300) {
+  const margin = 8;
+  const menuWidth = 220;
+  return {
+    x: Math.min(x, Math.max(margin, window.innerWidth - menuWidth - margin)),
+    y: y + estimatedHeight > window.innerHeight
+      ? Math.max(margin, y - estimatedHeight)
+      : y
+  };
+}
 
 export default function App() {
   const [initialSession] = useState(() => loadInitialSession());
@@ -142,6 +162,7 @@ export default function App() {
   const [replaceScope, setReplaceScope] = useState<ReplaceScope>("all");
   const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
   const [lineHighlights, setLineHighlights] = useState<SearchMatch[]>([]);
+  const [colorMarkersByTab, setColorMarkersByTab] = useState<Record<string, ColorMarker[]>>({});
   const [tabContextMenu, setTabContextMenu] = useState<TabContextMenuState>(null);
   const [pendingCloseTab, setPendingCloseTab] = useState<PendingCloseTab>(null);
   const [lineMenu, setLineMenu] = useState<LineMenuState>(null);
@@ -187,6 +208,7 @@ export default function App() {
     () => getLanguageDefinition(activeTab.language, customLanguages),
     [activeTab.language, customLanguages]
   );
+  const activeColorMarkers = colorMarkersByTab[activeTab.id] ?? [];
   const activeFont = useMemo(() => {
     const languageFont = languageFonts[activeTab.language];
     return {
@@ -250,6 +272,9 @@ export default function App() {
     const tab = createEmptyTab();
     setTabs((current) => [...current, tab]);
     setActiveId(tab.id);
+    requestAnimationFrame(() => {
+      editorRef.current?.focus();
+    });
     setStatus("新建文档");
   }, []);
 
@@ -545,6 +570,11 @@ export default function App() {
   }, [updateActiveTab]);
 
   const closeTabById = useCallback((id: string) => {
+    setColorMarkersByTab((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
     setTabs((current) => {
       if (current.length === 1) {
         const blank = createEmptyTab();
@@ -840,6 +870,46 @@ export default function App() {
     }
     return activeTab.content.slice(selection.start, selection.end);
   }, [activeTab.content]);
+
+  const markSelectedText = useCallback((color: string) => {
+    const text = getSelectedText();
+    if (!text) {
+      setStatus("请先选择要标记的内容");
+      return;
+    }
+    setColorMarkersByTab((current) => {
+      const markers = current[activeId] ?? [];
+      return {
+        ...current,
+        [activeId]: [
+          ...markers.filter((marker) => marker.text !== text),
+          { id: createId(), text, color }
+        ]
+      };
+    });
+    setStatus("已标记当前选择的所有匹配项");
+  }, [activeId, getSelectedText]);
+
+  const clearSelectedColorMarker = useCallback(() => {
+    const text = getSelectedText();
+    if (!text) {
+      return;
+    }
+    setColorMarkersByTab((current) => ({
+      ...current,
+      [activeId]: (current[activeId] ?? []).filter((marker) => marker.text !== text)
+    }));
+    setStatus("已清除当前选择的颜色标记");
+  }, [activeId, getSelectedText]);
+
+  const clearAllColorMarkers = useCallback(() => {
+    setColorMarkersByTab((current) => {
+      const next = { ...current };
+      delete next[activeId];
+      return next;
+    });
+    setStatus("已清除当前文件的所有颜色标记");
+  }, [activeId]);
 
   const closeSearchWidget = useCallback(() => {
     setIsSearchWidgetOpen(false);
@@ -1222,6 +1292,57 @@ export default function App() {
     });
   }, [updateActiveContent]);
 
+  const copySelection = useCallback(async () => {
+    const text = getSelectedText();
+    if (!text) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatus("已复制所选内容");
+    } catch (error) {
+      setStatus(`复制失败：${String(error)}`);
+    }
+  }, [getSelectedText]);
+
+  const deleteSelection = useCallback(() => {
+    const selection = editorRef.current?.getSelectionRange();
+    if (!selection || selection.start === selection.end) {
+      return;
+    }
+    const next = `${activeTab.content.slice(0, selection.start)}${activeTab.content.slice(selection.end)}`;
+    updateContentWithSelection(next, selection.start);
+    setStatus("已删除所选内容");
+  }, [activeTab.content, updateContentWithSelection]);
+
+  const cutSelection = useCallback(async () => {
+    const text = getSelectedText();
+    if (!text) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      deleteSelection();
+      setStatus("已剪切所选内容");
+    } catch (error) {
+      setStatus(`剪切失败：${String(error)}`);
+    }
+  }, [deleteSelection, getSelectedText]);
+
+  const pasteIntoSelection = useCallback(async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      const selection = editorRef.current?.getSelectionRange();
+      const start = selection?.start ?? cursor;
+      const end = selection?.end ?? cursor;
+      const next = `${activeTab.content.slice(0, start)}${text}${activeTab.content.slice(end)}`;
+      updateContentWithSelection(next, start + text.length);
+      setStatus("已粘贴");
+    } catch (error) {
+      setStatus(`粘贴失败：${String(error)}`);
+    }
+  }, [activeTab.content, cursor, updateContentWithSelection]);
+
   const copyLines = useCallback(async (mode: "random" | "odd" | "even") => {
     const lines = activeTab.content.split("\n");
     let selected: string[] = [];
@@ -1313,12 +1434,15 @@ export default function App() {
       const lineEnd = lineIndex + 1 < lineStarts.length
         ? Math.max(lineStart, lineStarts[lineIndex + 1] - 1)
         : activeTab.content.length;
-      const lineText = activeTab.content.slice(lineStart, lineEnd).trim() || "(empty line)";
+      const lineText = activeTab.content.slice(lineStart, lineEnd) || "(empty line)";
+      const matchStart = Math.max(0, match.start - lineStart);
+      const matchEnd = Math.max(matchStart, Math.min(lineText.length, match.end - lineStart));
       return {
         index,
         line: lineIndex + 1,
-        column: match.start - lineStart + 1,
-        text: lineText.length > 180 ? `${lineText.slice(0, 180)}...` : lineText
+        before: lineText.slice(0, matchStart),
+        matchText: lineText.slice(matchStart, matchEnd),
+        after: lineText.slice(matchEnd)
       };
     });
   }, [activeTab.content, lineStarts, matches]);
@@ -1696,7 +1820,7 @@ export default function App() {
           aria-label="当前软件版本"
           title="当前软件版本"
         >
-          v2.5
+          v2.8
         </span>
         <button
           className={wordWrap ? "toggle is-active" : "toggle"}
@@ -1773,6 +1897,7 @@ export default function App() {
                 matches={matches}
                 currentMatchIndex={currentMatchIndex}
                 lineHighlights={lineHighlights}
+                colorMarkers={activeColorMarkers}
                 fontStyle={editorFontStyle}
                 language={activeLanguage}
                 onChange={updateActiveContent}
@@ -1781,6 +1906,12 @@ export default function App() {
                 onLineHighlightsClear={() => setLineHighlights([])}
                 onOpenSearchWidget={openSearchWidget}
                 onJumpToLine={jumpToLine}
+                onEditorContextMenu={(x, y) => {
+                  const position = positionContextMenu(x, y, 360);
+                  setTabContextMenu(null);
+                  setMoreMenu(null);
+                  setLineMenu(position);
+                }}
                 onViewStateChange={updateActiveViewState}
                 onZoomWheel={handleEditorWheel}
               />
@@ -1906,14 +2037,18 @@ export default function App() {
                       <div className="search-results-list">
                         {searchResults.map((result) => (
                           <button
-                            key={`${result.index}-${result.line}-${result.column}`}
+                            key={`${result.index}-${result.line}`}
                             className={result.index === currentMatchIndex ? "is-active" : undefined}
                             onClick={() => selectMatch(result.index)}
                           >
-                            <span>
-                              Line {result.line}, Col {result.column}
+                            <span className="search-result-line">
+                              <strong>行号 {result.line}:</strong>
+                              <span>
+                                {result.before}
+                                <mark>{result.matchText}</mark>
+                                {result.after}
+                              </span>
                             </span>
-                            <small>{result.text}</small>
                           </button>
                         ))}
                         {matches.length > searchResults.length ? (
@@ -1988,21 +2123,56 @@ export default function App() {
          onClick={(event) => event.stopPropagation()}
          onPointerDown={(event) => event.stopPropagation()}
        >
-         <button onClick={() => { void copyLines("random"); setLineMenu(null); }}>随机复制N行</button>
-         <button onClick={() => { void copyLines("odd"); setLineMenu(null); }}>复制奇数行</button>
-         <button onClick={() => { void copyLines("even"); setLineMenu(null); }}>复制偶数行</button>
-         <button onClick={() => { deleteEmptyLines(); setLineMenu(null); }}>删除空行</button>
          {editorRef.current?.getSelectionRange().start !== editorRef.current?.getSelectionRange().end ? (
            <>
+             <button onClick={() => { void copySelection(); setLineMenu(null); }}>复制</button>
+             <button onClick={() => { void cutSelection(); setLineMenu(null); }}>剪切</button>
+             <button onClick={() => { void pasteIntoSelection(); setLineMenu(null); }}>粘贴</button>
+             <button onClick={() => { deleteSelection(); setLineMenu(null); }}>删除</button>
              <div className="context-menu-separator" />
-             <button onClick={() => { highlightSelectedLines(); setLineMenu(null); }}>高亮所在行</button>
-             <button onClick={() => { void copySelectedLines(); setLineMenu(null); }}>复制所在行</button>
-             <button onClick={() => { deleteSelectedLines(); setLineMenu(null); }}>删除所在行</button>
-             <button onClick={() => { keepSelectedLines(); setLineMenu(null); }}>删除所在行之外的行</button>
-             <button onClick={() => { trimSelectedLineEdges("start"); setLineMenu(null); }}>删除行首空格</button>
-             <button onClick={() => { trimSelectedLineEdges("end"); setLineMenu(null); }}>删除行尾空格</button>
+             <div className="context-menu-submenu">
+               <button className="context-menu-submenu-trigger">
+                 颜色标记
+                 <span className="context-menu-arrow">›</span>
+               </button>
+               <div className="context-submenu-panel">
+                 {markerColors.map((color) => (
+                   <button key={color.value} onClick={() => { markSelectedText(color.value); setLineMenu(null); }}>
+                     <span className="marker-color-swatch" style={{ background: color.value }} />
+                     {color.label}
+                   </button>
+                 ))}
+                 <div className="context-menu-separator" />
+                 <button onClick={() => { clearSelectedColorMarker(); setLineMenu(null); }}>清除当前选择的标记</button>
+                 <button disabled={!activeColorMarkers.length} onClick={() => { clearAllColorMarkers(); setLineMenu(null); }}>清除所有颜色标记</button>
+               </div>
+             </div>
+             <div className="context-menu-separator" />
            </>
          ) : null}
+         <div className="context-menu-submenu">
+           <button className="context-menu-submenu-trigger">
+             行操作
+             <span className="context-menu-arrow">›</span>
+           </button>
+           <div className="context-submenu-panel">
+             <button onClick={() => { void copyLines("random"); setLineMenu(null); }}>随机复制N行</button>
+             <button onClick={() => { void copyLines("odd"); setLineMenu(null); }}>复制奇数行</button>
+             <button onClick={() => { void copyLines("even"); setLineMenu(null); }}>复制偶数行</button>
+             <button onClick={() => { deleteEmptyLines(); setLineMenu(null); }}>删除空行</button>
+             {editorRef.current?.getSelectionRange().start !== editorRef.current?.getSelectionRange().end ? (
+               <>
+                 <div className="context-menu-separator" />
+                 <button onClick={() => { highlightSelectedLines(); setLineMenu(null); }}>高亮所在行</button>
+                 <button onClick={() => { void copySelectedLines(); setLineMenu(null); }}>复制所在行</button>
+                 <button onClick={() => { deleteSelectedLines(); setLineMenu(null); }}>删除所在行</button>
+                 <button onClick={() => { keepSelectedLines(); setLineMenu(null); }}>删除所在行之外的行</button>
+                 <button onClick={() => { trimSelectedLineEdges("start"); setLineMenu(null); }}>删除行首空格</button>
+                 <button onClick={() => { trimSelectedLineEdges("end"); setLineMenu(null); }}>删除行尾空格</button>
+               </>
+             ) : null}
+           </div>
+         </div>
        </div>
      ) : null}
 
@@ -2046,14 +2216,18 @@ export default function App() {
             <div className="search-results-list">
               {searchResults.map((result) => (
                 <button
-                  key={`${result.index}-${result.line}-${result.column}`}
+                  key={`${result.index}-${result.line}`}
                   className={result.index === currentMatchIndex ? "is-active" : undefined}
                   onClick={() => selectMatch(result.index)}
                 >
-                  <span>
-                    Line {result.line}, Col {result.column}
+                  <span className="search-result-line">
+                    <strong>行号 {result.line}:</strong>
+                    <span>
+                      {result.before}
+                      <mark>{result.matchText}</mark>
+                      {result.after}
+                    </span>
                   </span>
-                  <small>{result.text}</small>
                 </button>
               ))}
               {matches.length > searchResults.length ? (

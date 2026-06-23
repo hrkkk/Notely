@@ -6,7 +6,7 @@ import { highlightSelectionMatches } from "@codemirror/search";
 import { CSSProperties, WheelEvent, forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { getLanguageExtensions } from "../languages/extensions";
 import { createSearchDecorations } from "../search/decorations";
-import type { CodeMirrorEditorHandle, CodeMirrorEditorProps, CustomKeywordStyle, CustomRegexHighlight, EditorDisplayOptions, LanguageDefinition } from "../types";
+import type { CodeMirrorEditorHandle, CodeMirrorEditorProps, ColorMarker, CustomKeywordStyle, CustomRegexHighlight, EditorDisplayOptions, LanguageDefinition } from "../types";
 
 class InlineSymbolWidget extends WidgetType {
   constructor(private readonly symbol: string, private readonly className: string) {
@@ -553,6 +553,45 @@ function createCustomRegexDecorations(state: EditorState, language: LanguageDefi
   return builder.finish();
 }
 
+function createColorMarkerDecorations(state: EditorState, markers: ColorMarker[]) {
+  const builder = new RangeSetBuilder<Decoration>();
+  if (!markers.length) {
+    return builder.finish();
+  }
+
+  const content = state.doc.toString();
+  const entries: Array<{ from: number; to: number; decoration: Decoration }> = [];
+  markers.forEach((marker) => {
+    if (!marker.text) {
+      return;
+    }
+    let index = content.indexOf(marker.text);
+    while (index !== -1) {
+      entries.push({
+        from: index,
+        to: index + marker.text.length,
+        decoration: Decoration.mark({
+          class: "cm-color-marker",
+          attributes: {
+            style: `background-color: ${marker.color}`
+          }
+        })
+      });
+      index = content.indexOf(marker.text, index + Math.max(marker.text.length, 1));
+    }
+  });
+
+  entries
+    .sort((first, second) => first.from - second.from || first.to - second.to)
+    .forEach((entry) => {
+      if (entry.from < entry.to) {
+        builder.add(entry.from, entry.to, entry.decoration);
+      }
+    });
+
+  return builder.finish();
+}
+
 export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(function CodeMirrorEditor({
   documentId,
   content,
@@ -562,6 +601,7 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
   matches,
   currentMatchIndex,
   lineHighlights,
+  colorMarkers,
   fontStyle,
   language,
   onChange,
@@ -570,6 +610,7 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
   onLineHighlightsClear,
   onOpenSearchWidget,
   onJumpToLine,
+  onEditorContextMenu,
   onViewStateChange,
   onZoomWheel
 }, ref) {
@@ -580,6 +621,7 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
   const decorationCompartmentRef = useRef(new Compartment());
   const displayCompartmentRef = useRef(new Compartment());
   const customRegexCompartmentRef = useRef(new Compartment());
+  const colorMarkerCompartmentRef = useRef(new Compartment());
   const languageCompartmentRef = useRef(new Compartment());
   const changeRef = useRef(onChange);
   const cursorRef = useRef(onCursorChange);
@@ -587,6 +629,7 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
   const clearLineHighlightsRef = useRef(onLineHighlightsClear);
   const openSearchRef = useRef(onOpenSearchWidget);
   const jumpToLineRef = useRef(onJumpToLine);
+  const editorContextMenuRef = useRef(onEditorContextMenu);
   const viewStateChangeRef = useRef(onViewStateChange);
   const languageLoadRef = useRef(0);
   const restoringViewStateRef = useRef(false);
@@ -600,8 +643,9 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
     clearLineHighlightsRef.current = onLineHighlightsClear;
     openSearchRef.current = onOpenSearchWidget;
     jumpToLineRef.current = onJumpToLine;
+    editorContextMenuRef.current = onEditorContextMenu;
     viewStateChangeRef.current = onViewStateChange;
-  }, [onChange, onCurrentMatchReset, onCursorChange, onJumpToLine, onLineHighlightsClear, onOpenSearchWidget, onViewStateChange]);
+  }, [onChange, onCurrentMatchReset, onCursorChange, onEditorContextMenu, onJumpToLine, onLineHighlightsClear, onOpenSearchWidget, onViewStateChange]);
 
   useEffect(() => {
     contentRef.current = content;
@@ -717,6 +761,12 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
       provide: (field) => EditorView.decorations.from(field)
     });
 
+    const colorMarkerDecorationField = StateField.define<DecorationSet>({
+      create: (state) => createColorMarkerDecorations(state, colorMarkers),
+      update: (decorations, transaction) => transaction.docChanged ? createColorMarkerDecorations(transaction.state, colorMarkers) : decorations.map(transaction.changes),
+      provide: (field) => EditorView.decorations.from(field)
+    });
+
     const updateListener = EditorView.updateListener.of((update) => {
       if (update.docChanged) {
         const nextContent = update.state.doc.toString();
@@ -735,6 +785,17 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
       dblclick: () => {
         clearLineHighlightsRef.current();
         return false;
+      }
+    });
+
+    const editorContextMenuHandler = EditorView.domEventHandlers({
+      contextmenu: (event, view) => {
+        if (view.state.selection.main.empty) {
+          return false;
+        }
+        event.preventDefault();
+        editorContextMenuRef.current(event.clientX, event.clientY);
+        return true;
       }
     });
 
@@ -786,12 +847,14 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
           keymap.of([...defaultKeymap, ...historyKeymap]),
           updateListener,
           clearLineHighlightsOnDoubleClick,
+          editorContextMenuHandler,
           scrollStateListener,
           highlightSelectionMatches({ wholeWords: true }),
           wrapCompartmentRef.current.of(wordWrap ? EditorView.lineWrapping : []),
           decorationCompartmentRef.current.of(searchDecorationField),
           displayCompartmentRef.current.of(Prec.highest(displayBackgroundsExtension(displayOptions))),
           customRegexCompartmentRef.current.of(customRegexDecorationField),
+          colorMarkerCompartmentRef.current.of(colorMarkerDecorationField),
           languageCompartmentRef.current.of([])
         ]
       })
@@ -867,6 +930,19 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
     });
     view.dispatch({ effects: decorationCompartmentRef.current.reconfigure(field) });
   }, [currentMatchIndex, lineHighlights, matches]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) {
+      return;
+    }
+    const field = StateField.define<DecorationSet>({
+      create: (state) => createColorMarkerDecorations(state, colorMarkers),
+      update: (decorations, transaction) => transaction.docChanged ? createColorMarkerDecorations(transaction.state, colorMarkers) : decorations.map(transaction.changes),
+      provide: (field) => EditorView.decorations.from(field)
+    });
+    view.dispatch({ effects: colorMarkerCompartmentRef.current.reconfigure(field) });
+  }, [colorMarkers]);
 
   useEffect(() => {
     const view = viewRef.current;
