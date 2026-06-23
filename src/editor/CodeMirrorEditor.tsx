@@ -62,6 +62,23 @@ function createDisplayDecorations(state: EditorState, options: EditorDisplayOpti
   return builder.finish();
 }
 
+class IndentGuideWidget extends WidgetType {
+  constructor(private readonly column: number) {
+    super();
+  }
+
+  toDOM() {
+    const span = document.createElement("span");
+    span.className = "cm-indent-guide-widget";
+    span.style.left = `${this.column}ch`;
+    return span;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
 function getIndentColumns(text: string, tabSize: number) {
   const indent = text.match(/^[\t ]*/)?.[0] ?? "";
   if (!indent) {
@@ -318,17 +335,76 @@ function createDisplayBackgroundDecorations(view: EditorView, options: EditorDis
   return builder.finish();
 }
 
+function createForegroundDisplayDecorations(view: EditorView, options: EditorDisplayOptions) {
+  const builder = new RangeSetBuilder<Decoration>();
+  const selectedRanges = view.state.selection.ranges.filter((range) => !range.empty);
+  const hasSelectedRange = selectedRanges.length > 0;
+  if (!options.showIndentGuides && !options.showSpaces && !options.showTabs && !options.showLineBreaks && !hasSelectedRange) {
+    return builder.finish();
+  }
+  const isSelected = (from: number, to: number) => {
+    return selectedRanges.some((range) => from < range.to && to > range.from);
+  };
+
+  const seenLines = new Set<number>();
+  for (const range of view.visibleRanges) {
+    let position = range.from;
+    while (position <= range.to) {
+      const line = view.state.doc.lineAt(position);
+      if (!seenLines.has(line.from)) {
+        seenLines.add(line.from);
+        const indentGuideColumns = line.text.trim().length === 0
+          ? getBlankLineIndentGuideColumns(view.state, line.number, view.state.tabSize)
+          : getIndentGuideColumns(line.text, view.state.tabSize);
+
+        if (options.showIndentGuides) {
+          indentGuideColumns.forEach((column) => {
+            builder.add(line.from, line.from, Decoration.widget({
+              widget: new IndentGuideWidget(column),
+              side: -1
+            }));
+          });
+        }
+
+        for (let index = 0; index < line.text.length; index += 1) {
+          const char = line.text[index];
+          const from = line.from + index;
+          if (char === " " && (options.showSpaces || isSelected(from, from + 1))) {
+            builder.add(from, from + 1, Decoration.mark({ class: "cm-visible-space-char" }));
+          } else if (char === "\t" && options.showTabs) {
+            builder.add(from, from + 1, Decoration.mark({ class: "cm-visible-tab-char" }));
+          }
+        }
+
+        if (options.showLineBreaks && line.number < view.state.doc.lines) {
+          builder.add(line.to, line.to, Decoration.widget({
+            widget: new InlineSymbolWidget("↵", "cm-visible-linebreak"),
+            side: 1
+          }));
+        }
+      }
+
+      if (line.to >= range.to) {
+        break;
+      }
+      position = line.to + 1;
+    }
+  }
+
+  return builder.finish();
+}
+
 function displayBackgroundsExtension(options: EditorDisplayOptions) {
   return ViewPlugin.fromClass(class {
     decorations: DecorationSet;
 
     constructor(view: EditorView) {
-      this.decorations = createDisplayBackgroundDecorations(view, options);
+      this.decorations = createForegroundDisplayDecorations(view, options);
     }
 
     update(update: ViewUpdate) {
-      if (update.docChanged || update.viewportChanged || update.geometryChanged) {
-        this.decorations = createDisplayBackgroundDecorations(update.view, options);
+      if (update.docChanged || update.selectionSet || update.viewportChanged || update.geometryChanged) {
+        this.decorations = createForegroundDisplayDecorations(update.view, options);
       }
     }
   }, {
@@ -478,7 +554,9 @@ function createCustomRegexDecorations(state: EditorState, language: LanguageDefi
 }
 
 export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(function CodeMirrorEditor({
+  documentId,
   content,
+  viewState,
   wordWrap,
   displayOptions,
   matches,
@@ -491,6 +569,8 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
   onCurrentMatchReset,
   onLineHighlightsClear,
   onOpenSearchWidget,
+  onJumpToLine,
+  onViewStateChange,
   onZoomWheel
 }, ref) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -506,7 +586,12 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
   const resetRef = useRef(onCurrentMatchReset);
   const clearLineHighlightsRef = useRef(onLineHighlightsClear);
   const openSearchRef = useRef(onOpenSearchWidget);
+  const jumpToLineRef = useRef(onJumpToLine);
+  const viewStateChangeRef = useRef(onViewStateChange);
   const languageLoadRef = useRef(0);
+  const restoringViewStateRef = useRef(false);
+  const viewStateFrameRef = useRef(0);
+  const documentIdRef = useRef(documentId);
 
   useEffect(() => {
     changeRef.current = onChange;
@@ -514,11 +599,55 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
     resetRef.current = onCurrentMatchReset;
     clearLineHighlightsRef.current = onLineHighlightsClear;
     openSearchRef.current = onOpenSearchWidget;
-  }, [onChange, onCurrentMatchReset, onCursorChange, onLineHighlightsClear, onOpenSearchWidget]);
+    jumpToLineRef.current = onJumpToLine;
+    viewStateChangeRef.current = onViewStateChange;
+  }, [onChange, onCurrentMatchReset, onCursorChange, onJumpToLine, onLineHighlightsClear, onOpenSearchWidget, onViewStateChange]);
 
   useEffect(() => {
     contentRef.current = content;
   }, [content]);
+
+  const reportViewState = () => {
+    const view = viewRef.current;
+    if (!view || restoringViewStateRef.current || viewStateFrameRef.current) {
+      return;
+    }
+    const onViewStateChange = viewStateChangeRef.current;
+    viewStateFrameRef.current = window.requestAnimationFrame(() => {
+      viewStateFrameRef.current = 0;
+      const currentView = viewRef.current;
+      if (!currentView || restoringViewStateRef.current) {
+        return;
+      }
+      const selection = currentView.state.selection.main;
+      onViewStateChange({
+        selectionStart: selection.from,
+        selectionEnd: selection.to,
+        scrollTop: currentView.scrollDOM.scrollTop,
+        scrollLeft: currentView.scrollDOM.scrollLeft
+      });
+    });
+  };
+
+  const restoreViewState = (state = viewState) => {
+    const view = viewRef.current;
+    if (!view || !state) {
+      return;
+    }
+    const selectionStart = Math.max(0, Math.min(view.state.doc.length, state.selectionStart));
+    const selectionEnd = Math.max(0, Math.min(view.state.doc.length, state.selectionEnd));
+    restoringViewStateRef.current = true;
+    view.dispatch({ selection: { anchor: selectionStart, head: selectionEnd } });
+    cursorRef.current(selectionEnd);
+    requestAnimationFrame(() => {
+      const currentView = viewRef.current;
+      if (currentView) {
+        currentView.scrollDOM.scrollTop = state.scrollTop;
+        currentView.scrollDOM.scrollLeft = state.scrollLeft;
+      }
+      restoringViewStateRef.current = false;
+    });
+  };
 
   useImperativeHandle(ref, () => ({
     focus: () => viewRef.current?.focus(),
@@ -538,6 +667,27 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
     getSelectionRange: () => {
       const selection = viewRef.current?.state.selection.main;
       return selection ? { start: selection.from, end: selection.to } : { start: 0, end: 0 };
+    },
+    getViewState: () => {
+      const view = viewRef.current;
+      if (!view) {
+        return { selectionStart: 0, selectionEnd: 0, scrollTop: 0, scrollLeft: 0 };
+      }
+      const selection = view.state.selection.main;
+      return {
+        selectionStart: selection.from,
+        selectionEnd: selection.to,
+        scrollTop: view.scrollDOM.scrollTop,
+        scrollLeft: view.scrollDOM.scrollLeft
+      };
+    },
+    isOffsetVisible: (offset) => {
+      const view = viewRef.current;
+      if (!view) {
+        return false;
+      }
+      const safeOffset = Math.max(0, Math.min(view.state.doc.length, offset));
+      return view.visibleRanges.some((range) => safeOffset >= range.from && safeOffset <= range.to);
     },
     scrollToOffset: (offset) => {
       const view = viewRef.current;
@@ -577,12 +727,20 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
       }
       if (update.selectionSet || update.docChanged) {
         cursorRef.current(update.state.selection.main.head);
+        reportViewState();
       }
     });
 
     const clearLineHighlightsOnDoubleClick = EditorView.domEventHandlers({
       dblclick: () => {
         clearLineHighlightsRef.current();
+        return false;
+      }
+    });
+
+    const scrollStateListener = EditorView.domEventHandlers({
+      scroll: () => {
+        reportViewState();
         return false;
       }
     });
@@ -597,6 +755,13 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
               key: "Mod-f",
               run: () => {
                 openSearchRef.current("search");
+                return true;
+              }
+            },
+            {
+              key: "Mod-g",
+              run: () => {
+                jumpToLineRef.current();
                 return true;
               }
             },
@@ -621,10 +786,11 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
           keymap.of([...defaultKeymap, ...historyKeymap]),
           updateListener,
           clearLineHighlightsOnDoubleClick,
+          scrollStateListener,
           highlightSelectionMatches({ wholeWords: true }),
           wrapCompartmentRef.current.of(wordWrap ? EditorView.lineWrapping : []),
           decorationCompartmentRef.current.of(searchDecorationField),
-          displayCompartmentRef.current.of(displayBackgroundsExtension(displayOptions)),
+          displayCompartmentRef.current.of(Prec.highest(displayBackgroundsExtension(displayOptions))),
           customRegexCompartmentRef.current.of(customRegexDecorationField),
           languageCompartmentRef.current.of([])
         ]
@@ -632,7 +798,12 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
     });
 
     viewRef.current = view;
+    restoreViewState();
     return () => {
+      if (viewStateFrameRef.current) {
+        window.cancelAnimationFrame(viewStateFrameRef.current);
+        viewStateFrameRef.current = 0;
+      }
       view.destroy();
       viewRef.current = null;
     };
@@ -643,15 +814,27 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
     if (!view) {
       return;
     }
+    const didSwitchDocument = documentIdRef.current !== documentId;
+    documentIdRef.current = documentId;
     const current = view.state.doc.toString();
     if (current === content) {
+      if (didSwitchDocument) {
+        restoreViewState();
+      }
       return;
     }
+    const selection = view.state.selection.main;
     view.dispatch({
       changes: { from: 0, to: current.length, insert: content },
-      selection: { anchor: Math.min(content.length, view.state.selection.main.head) }
+      selection: {
+        anchor: Math.min(content.length, didSwitchDocument ? viewState?.selectionStart ?? 0 : selection.anchor),
+        head: Math.min(content.length, didSwitchDocument ? viewState?.selectionEnd ?? 0 : selection.head)
+      }
     });
-  }, [content]);
+    if (didSwitchDocument) {
+      requestAnimationFrame(() => restoreViewState());
+    }
+  }, [content, documentId, viewState]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -691,7 +874,7 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
       return;
     }
     view.dispatch({
-      effects: displayCompartmentRef.current.reconfigure(displayBackgroundsExtension(displayOptions))
+      effects: displayCompartmentRef.current.reconfigure(Prec.highest(displayBackgroundsExtension(displayOptions)))
     });
   }, [displayOptions]);
 

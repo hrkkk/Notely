@@ -33,6 +33,7 @@ export type DocumentTab = {
   diskSize: number | null;
   language: string;
   history: string[];
+  viewState?: EditorViewState;
 };
 
 export type SearchMatch = {
@@ -85,11 +86,22 @@ export type CodeMirrorEditorHandle = {
   focus: () => void;
   setSelectionRange: (start: number, end: number, focusEditor?: boolean) => void;
   getSelectionRange: () => { start: number; end: number };
+  getViewState: () => EditorViewState;
+  isOffsetVisible: (offset: number) => boolean;
   scrollToOffset: (offset: number) => void;
 };
 
+export type EditorViewState = {
+  selectionStart: number;
+  selectionEnd: number;
+  scrollTop: number;
+  scrollLeft: number;
+};
+
 export type CodeMirrorEditorProps = {
+  documentId: string;
   content: string;
+  viewState?: EditorViewState;
   wordWrap: boolean;
   displayOptions: EditorDisplayOptions;
   matches: SearchMatch[];
@@ -102,6 +114,8 @@ export type CodeMirrorEditorProps = {
   onCurrentMatchReset: () => void;
   onLineHighlightsClear: () => void;
   onOpenSearchWidget: (mode: "search" | "replace") => void;
+  onJumpToLine: () => void;
+  onViewStateChange: (state: EditorViewState) => void;
   onZoomWheel: (event: WheelEvent<HTMLDivElement>) => void;
 };
 

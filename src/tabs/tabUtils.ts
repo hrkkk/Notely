@@ -54,7 +54,8 @@ function createEmptyTab(): DocumentTab {
     diskModifiedMs: null,
     diskSize: null,
     language: "Plain Text",
-    history: []
+    history: [],
+    viewState: { selectionStart: 0, selectionEnd: 0, scrollTop: 0, scrollLeft: 0 }
   };
 }
 
@@ -71,7 +72,8 @@ function createTabFromFile(file: FilePayload, customLanguages: LanguageDefinitio
     savedLineEnding: file.line_ending,
     ...fileStateFromPayload(file),
     language: detectLanguage(file.name, customLanguages),
-    history: []
+    history: [],
+    viewState: { selectionStart: 0, selectionEnd: 0, scrollTop: 0, scrollLeft: 0 }
   };
 }
 
@@ -92,7 +94,8 @@ function createLoadingTab(path: string): DocumentTab {
     diskModifiedMs: null,
     diskSize: null,
     language: "Plain Text",
-    history: []
+    history: [],
+    viewState: { selectionStart: 0, selectionEnd: 0, scrollTop: 0, scrollLeft: 0 }
   };
 }
 
@@ -126,7 +129,8 @@ function loadInitialSession(): SessionPayload {
           savedLineEnding: tab.savedLineEnding || tab.lineEnding || "LF",
           diskModifiedMs: tab.diskModifiedMs ?? null,
           diskSize: tab.diskSize ?? null,
-          history: []
+          history: [],
+          viewState: tab.viewState ?? { selectionStart: 0, selectionEnd: 0, scrollTop: 0, scrollLeft: 0 }
         }))
       : [];
     if (!tabs.length) {

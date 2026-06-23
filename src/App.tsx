@@ -84,6 +84,7 @@ import type {
   CodeMirrorEditorHandle,
   DocumentTab,
   EncodingAction,
+  EditorViewState,
   FilePayload,
   FileState,
   FontChoice,
@@ -103,6 +104,10 @@ import { buildLineStarts, getLineIndexAtOffset, lineAndColumnFromStarts } from "
 import appIcon from "../src-tauri/icons/icon.png";
 
 const CodeMirrorEditor = lazy(() => import("./editor/CodeMirrorEditor"));
+
+type PendingCloseTab = {
+  tabId: string;
+} | null;
 
 export default function App() {
   const [initialSession] = useState(() => loadInitialSession());
@@ -138,6 +143,7 @@ export default function App() {
   const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
   const [lineHighlights, setLineHighlights] = useState<SearchMatch[]>([]);
   const [tabContextMenu, setTabContextMenu] = useState<TabContextMenuState>(null);
+  const [pendingCloseTab, setPendingCloseTab] = useState<PendingCloseTab>(null);
   const [lineMenu, setLineMenu] = useState<LineMenuState>(null);
   const [moreMenu, setMoreMenu] = useState<MoreMenuState>(null);
   const [systemFonts, setSystemFonts] = useState<string[]>(fallbackFontFamilies);
@@ -146,7 +152,7 @@ export default function App() {
     showSpaces: false,
     showLineBreaks: false,
     showTabs: false,
-    showIndentGuides: false
+    showIndentGuides: true
   });
   const [languageReloadFeedback, setLanguageReloadFeedback] = useState("");
   const [editorZoom, setEditorZoom] = useState(100);
@@ -216,7 +222,30 @@ export default function App() {
       })
     );
   }, [activeId]);
+  const updateTabViewState = useCallback((id: string, viewState: EditorViewState) => {
+    setTabs((current) =>
+      current.map((tab) => (tab.id === id ? { ...tab, viewState } : tab))
+    );
+  }, []);
 
+  const updateActiveViewState = useCallback((viewState: EditorViewState) => {
+    updateTabViewState(activeId, viewState);
+  }, [activeId, updateTabViewState]);
+
+  const captureActiveViewState = useCallback(() => {
+    const viewState = editorRef.current?.getViewState();
+    if (viewState) {
+      updateTabViewState(activeId, viewState);
+    }
+  }, [activeId, updateTabViewState]);
+
+  const switchTab = useCallback((id: string) => {
+    if (id === activeId) {
+      return;
+    }
+    captureActiveViewState();
+    setActiveId(id);
+  }, [activeId, captureActiveViewState]);
   const addNewTab = useCallback(() => {
     const tab = createEmptyTab();
     setTabs((current) => [...current, tab]);
@@ -515,16 +544,8 @@ export default function App() {
     setStatus(`Line endings set to ${lineEnding}`);
   }, [updateActiveTab]);
 
-  const closeTab = useCallback((id: string) => {
+  const closeTabById = useCallback((id: string) => {
     setTabs((current) => {
-      const closing = current.find((tab) => tab.id === id);
-      if (closing && isTabDirty(closing)) {
-        const shouldClose = window.confirm(`"${closing.name}" 尚未保存，确定关闭吗？`);
-        if (!shouldClose) {
-          return current;
-        }
-      }
-
       if (current.length === 1) {
         const blank = createEmptyTab();
         setActiveId(blank.id);
@@ -540,6 +561,46 @@ export default function App() {
     });
   }, [activeId]);
 
+  const closeTab = useCallback((id: string) => {
+    captureActiveViewState();
+    const closing = tabs.find((tab) => tab.id === id);
+    if (closing && isTabDirty(closing)) {
+      setPendingCloseTab({ tabId: id });
+      setTabContextMenu(null);
+      return;
+    }
+    closeTabById(id);
+  }, [captureActiveViewState, closeTabById, tabs]);
+
+  const cancelPendingClose = useCallback(() => {
+    setPendingCloseTab(null);
+    editorRef.current?.focus();
+  }, []);
+
+  const discardPendingClose = useCallback(() => {
+    const tabId = pendingCloseTab?.tabId;
+    setPendingCloseTab(null);
+    if (tabId) {
+      closeTabById(tabId);
+    }
+  }, [closeTabById, pendingCloseTab]);
+
+  const savePendingClose = useCallback(async () => {
+    const tabId = pendingCloseTab?.tabId;
+    if (!tabId) {
+      return;
+    }
+    const tab = tabs.find((item) => item.id === tabId);
+    if (!tab) {
+      setPendingCloseTab(null);
+      return;
+    }
+    const didSave = await saveTabAs(tab);
+    if (didSave) {
+      setPendingCloseTab(null);
+      closeTabById(tabId);
+    }
+  }, [closeTabById, pendingCloseTab, saveTabAs, tabs]);
   const closeOtherTabs = useCallback((id: string) => {
     setTabs((current) => {
       const target = current.find((tab) => tab.id === id);
@@ -907,6 +968,7 @@ export default function App() {
 
     let timer = 0;
     let position = 0;
+    let didAutoRevealMatch = false;
     const collected: SearchMatch[] = [];
     const chunkSize = 256 * 1024;
     const overlap = searchOptions.regex ? 1024 : Math.max(0, query.length - 1);
@@ -928,6 +990,17 @@ export default function App() {
         const chunkMatches = findMatchesInRange(activeTab.content, query, searchOptions, start, scanEnd)
           .filter((match) => match.start >= start && match.start < end);
         collected.push(...chunkMatches);
+        if (!didAutoRevealMatch && collected.length) {
+          didAutoRevealMatch = true;
+          const match = collected[0];
+          const editor = editorRef.current;
+          if (editor && !editor.isOffsetVisible(match.start)) {
+            editor.setSelectionRange(match.start, match.end, false);
+            editor.scrollToOffset(match.start);
+            setCursor(match.end);
+            setCurrentMatchIndex(0);
+          }
+        }
         position = end;
       }
 
@@ -958,23 +1031,25 @@ export default function App() {
     return matches.findIndex((match) => match.start === selection.start && match.end === selection.end);
   }, [currentMatchIndex, cursor, matches]);
 
-  const selectMatch = useCallback((index: number) => {
+  const selectMatch = useCallback((index: number, focusEditor = true) => {
     const match = matches[index];
     if (!match) {
       return;
     }
 
     const editor = editorRef.current;
-    editor?.setSelectionRange(match.start, match.end);
+    editor?.setSelectionRange(match.start, match.end, focusEditor);
     editor?.scrollToOffset(match.start);
     setCursor(match.end);
     setCurrentMatchIndex(index);
     setStatus(`匹配 ${index + 1}/${matches.length}`);
   }, [lineStarts, matches]);
 
-  const findNext = useCallback(() => {
+  const findNext = useCallback((focusEditor = true) => {
     if (!query) {
-      editorRef.current?.focus();
+      if (focusEditor) {
+        editorRef.current?.focus();
+      }
       return;
     }
 
@@ -992,12 +1067,14 @@ export default function App() {
       currentMatchIndex >= 0
         ? (currentMatchIndex + 1) % matches.length
         : matches.findIndex((match) => match.start >= selectionEnd);
-    selectMatch(nextIndex === -1 ? 0 : nextIndex);
+    selectMatch(nextIndex === -1 ? 0 : nextIndex, focusEditor);
   }, [currentMatchIndex, cursor, isSearching, matches, query, selectMatch]);
 
-  const findPrevious = useCallback(() => {
+  const findPrevious = useCallback((focusEditor = true) => {
     if (!query) {
-      editorRef.current?.focus();
+      if (focusEditor) {
+        editorRef.current?.focus();
+      }
       return;
     }
 
@@ -1015,7 +1092,7 @@ export default function App() {
       currentMatchIndex >= 0
         ? (currentMatchIndex - 1 + matches.length) % matches.length
         : findPreviousMatchIndex(matches, selectionStart);
-    selectMatch(previousIndex === -1 ? matches.length - 1 : previousIndex);
+    selectMatch(previousIndex === -1 ? matches.length - 1 : previousIndex, focusEditor);
   }, [currentMatchIndex, cursor, isSearching, matches, query, selectMatch]);
 
   const replaceMatches = useCallback(() => {
@@ -1543,11 +1620,13 @@ export default function App() {
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === "ArrowDown") {
                 event.preventDefault();
-                findNext();
+                event.stopPropagation();
+                findNext(false);
               }
               if (event.key === "ArrowUp") {
                 event.preventDefault();
-                findPrevious();
+                event.stopPropagation();
+                findPrevious(false);
               }
             }}
             placeholder="查找"
@@ -1580,10 +1659,10 @@ export default function App() {
           >
             <List size={14} />
           </button>
-          <button title="上一个匹配" onClick={findPrevious} disabled={!matches.length || Boolean(searchError)}>
+          <button title="上一个匹配" onClick={() => findPrevious()} disabled={!matches.length || Boolean(searchError)}>
             <ChevronUp size={15} />
           </button>
-          <button title="下一个匹配" onClick={findNext} disabled={!matches.length || Boolean(searchError)}>
+          <button title="下一个匹配" onClick={() => findNext()} disabled={!matches.length || Boolean(searchError)}>
             <ChevronDown size={15} />
           </button>
         </div>
@@ -1617,7 +1696,7 @@ export default function App() {
           aria-label="当前软件版本"
           title="当前软件版本"
         >
-          v2.0
+          v2.5
         </span>
         <button
           className={wordWrap ? "toggle is-active" : "toggle"}
@@ -1650,10 +1729,10 @@ export default function App() {
             <button
               key={tab.id}
               className={tab.id === activeId ? "tab is-active" : "tab"}
-              onClick={() => setActiveId(tab.id)}
+              onClick={() => switchTab(tab.id)}
               onContextMenu={(event) => {
                 event.preventDefault();
-                setActiveId(tab.id);
+                switchTab(tab.id);
                 setTabContextMenu({ tabId: tab.id, x: event.clientX, y: event.clientY });
               }}
               title={tab.path ? `${tab.tabTitle ?? tab.name}\n${tab.path}` : (tab.tabTitle ?? tab.name)}
@@ -1686,7 +1765,9 @@ export default function App() {
             <Suspense fallback={<div className="editor-loading" aria-label="正在加载编辑器"><span>正在加载编辑器...</span></div>}>
               <CodeMirrorEditor
                 ref={editorRef}
+                documentId={activeTab.id}
                 content={activeTab.content}
+                viewState={activeTab.viewState}
                 wordWrap={wordWrap}
                 displayOptions={displayOptions}
                 matches={matches}
@@ -1699,6 +1780,8 @@ export default function App() {
                 onCurrentMatchReset={() => setCurrentMatchIndex(-1)}
                 onLineHighlightsClear={() => setLineHighlights([])}
                 onOpenSearchWidget={openSearchWidget}
+                onJumpToLine={jumpToLine}
+                onViewStateChange={updateActiveViewState}
                 onZoomWheel={handleEditorWheel}
               />
             </Suspense>
@@ -1716,17 +1799,23 @@ export default function App() {
                     }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter") {
-                        event.shiftKey ? findPrevious() : findNext();
+                        event.preventDefault();
+                        event.stopPropagation();
+                        event.shiftKey ? findPrevious(false) : findNext(false);
                       }
                       if (event.key === "ArrowDown") {
                         event.preventDefault();
-                        findNext();
+                        event.stopPropagation();
+                        findNext(false);
                       }
                       if (event.key === "ArrowUp") {
                         event.preventDefault();
-                        findPrevious();
+                        event.stopPropagation();
+                        findPrevious(false);
                       }
                       if (event.key === "Escape") {
+                        event.preventDefault();
+                        event.stopPropagation();
                         closeSearchWidget();
                       }
                     }}
@@ -1769,10 +1858,10 @@ export default function App() {
                   >
                     <List size={14} />
                   </button>
-                  <button title="Previous match" onClick={findPrevious} disabled={!matches.length || Boolean(searchError)}>
+                  <button title="Previous match" onClick={() => findPrevious()} disabled={!matches.length || Boolean(searchError)}>
                     <ChevronUp size={15} />
                   </button>
-                  <button title="Next match" onClick={findNext} disabled={!matches.length || Boolean(searchError)}>
+                  <button title="Next match" onClick={() => findNext()} disabled={!matches.length || Boolean(searchError)}>
                     <ChevronDown size={15} />
                   </button>
                   <button title="Close" onClick={closeSearchWidget}>
@@ -1840,7 +1929,31 @@ export default function App() {
             ) : null}
           </div>
      </section>
-
+     {pendingCloseTab ? (() => {
+       const tab = tabs.find((item) => item.id === pendingCloseTab.tabId);
+       if (!tab) {
+         return null;
+       }
+       return (
+         <div className="modal-backdrop" role="presentation" onPointerDown={cancelPendingClose}>
+           <section
+             className="confirm-dialog"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="close-unsaved-title"
+             onPointerDown={(event) => event.stopPropagation()}
+           >
+             <h2 id="close-unsaved-title">关闭未保存的标签页？</h2>
+             <p>“{tab.tabTitle ?? tab.name}” 已修改或尚未保存。</p>
+             <div className="confirm-actions">
+               <button className="primary-action" onClick={() => void savePendingClose()}>保存</button>
+               <button onClick={discardPendingClose}>不保存</button>
+               <button onClick={cancelPendingClose}>取消</button>
+             </div>
+           </section>
+         </div>
+       );
+     })() : null}
      {tabContextMenu ? (() => {
        const tab = tabs.find((item) => item.id === tabContextMenu.tabId);
        if (!tab) {
