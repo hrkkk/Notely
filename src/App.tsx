@@ -110,6 +110,13 @@ type PendingCloseTab = {
   tabId: string;
 } | null;
 
+type PendingExternalChange = {
+  tabId: string;
+  path: string;
+  name: string;
+  state: FileState | null;
+} | null;
+
 const markerColors = [
   { label: "黄色标记", value: "rgba(255, 213, 79, 0.55)" },
   { label: "绿色标记", value: "rgba(102, 187, 106, 0.45)" },
@@ -165,6 +172,7 @@ export default function App() {
   const [colorMarkersByTab, setColorMarkersByTab] = useState<Record<string, ColorMarker[]>>({});
   const [tabContextMenu, setTabContextMenu] = useState<TabContextMenuState>(null);
   const [pendingCloseTab, setPendingCloseTab] = useState<PendingCloseTab>(null);
+  const [pendingExternalChange, setPendingExternalChange] = useState<PendingExternalChange>(null);
   const [lineMenu, setLineMenu] = useState<LineMenuState>(null);
   const [moreMenu, setMoreMenu] = useState<MoreMenuState>(null);
   const [systemFonts, setSystemFonts] = useState<string[]>(fallbackFontFamilies);
@@ -563,6 +571,57 @@ export default function App() {
       setStatus(`Save failed: ${String(error)}`);
     }
   }, [activeTab, customLanguages, updateActiveTab]);
+
+  const dismissExternalChange = useCallback(() => {
+    setPendingExternalChange(null);
+    setStatus("Kept current editor content");
+    editorRef.current?.focus();
+  }, []);
+
+  const reloadExternalChange = useCallback(async () => {
+    if (!pendingExternalChange?.state) {
+      setPendingExternalChange(null);
+      setStatus(`"${pendingExternalChange?.name ?? "File"}" is no longer available on disk`);
+      return;
+    }
+
+    const tab = tabs.find((item) => (
+      item.id === pendingExternalChange.tabId &&
+      item.path === pendingExternalChange.path
+    ));
+    if (!tab) {
+      setPendingExternalChange(null);
+      return;
+    }
+
+    try {
+      const file = await openFileWithEncoding(tab.path!, tab.encoding);
+      setTabs((current) => current.map((item) => item.id === tab.id ? {
+        ...item,
+        name: file.name,
+        content: file.content,
+        savedContent: file.content,
+        encoding: file.encoding,
+        savedEncoding: file.encoding,
+        lineEnding: file.line_ending,
+        savedLineEnding: file.line_ending,
+        ...fileStateFromPayload(file),
+        language: detectLanguage(file.name, customLanguages),
+        history: []
+      } : item));
+      for (const key of externalChangeNotifiedRef.current) {
+        if (key.startsWith(`${tab.path}:`)) {
+          externalChangeNotifiedRef.current.delete(key);
+        }
+      }
+      setPendingExternalChange(null);
+      setStatus(`Reloaded ${file.name} from disk`);
+      window.requestAnimationFrame(() => editorRef.current?.focus());
+    } catch (error) {
+      setPendingExternalChange(null);
+      setStatus(`Reload failed: ${String(error)}`);
+    }
+  }, [customLanguages, pendingExternalChange, tabs]);
 
   const switchLineEnding = useCallback((lineEnding: LineEnding) => {
     updateActiveTab({ lineEnding });
@@ -1608,14 +1667,24 @@ export default function App() {
     const checkExternalChange = async () => {
       try {
         const state = await getFileState(activeTab.path!);
-        const key = `${activeTab.path}:${activeTab.diskModifiedMs ?? "missing"}:${activeTab.diskSize ?? "missing"}`;
+        const key = `${activeTab.path}:${state?.modified_ms ?? "missing"}:${state?.size ?? "missing"}`;
         if (hasFileStateChanged(activeTab, state)) {
           if (!externalChangeNotifiedRef.current.has(key)) {
             externalChangeNotifiedRef.current.add(key);
             setStatus(`"${activeTab.name}" changed on disk`);
+            setPendingExternalChange({
+              tabId: activeTab.id,
+              path: activeTab.path!,
+              name: activeTab.name,
+              state
+            });
           }
         } else {
-          externalChangeNotifiedRef.current.delete(key);
+          for (const notifiedKey of externalChangeNotifiedRef.current) {
+            if (notifiedKey.startsWith(`${activeTab.path}:`)) {
+              externalChangeNotifiedRef.current.delete(notifiedKey);
+            }
+          }
         }
       } catch {
         // Save-time checks still handle actionable errors; keep background polling quiet.
@@ -1625,7 +1694,7 @@ export default function App() {
     const timer = window.setInterval(checkExternalChange, 4000);
     void checkExternalChange();
     return () => window.clearInterval(timer);
-  }, [activeTab.diskModifiedMs, activeTab.diskSize, activeTab.name, activeTab.path]);
+  }, [activeTab.diskModifiedMs, activeTab.diskSize, activeTab.id, activeTab.name, activeTab.path]);
 
   useEffect(() => {
     if (!isLanguagePickerOpen && !isEncodingPickerOpen && !isLineEndingPickerOpen) {
@@ -2084,6 +2153,44 @@ export default function App() {
                <button className="primary-action" onClick={() => void savePendingClose()}>保存</button>
                <button onClick={discardPendingClose}>不保存</button>
                <button onClick={cancelPendingClose}>取消</button>
+             </div>
+           </section>
+         </div>
+       );
+     })() : null}
+     {pendingExternalChange ? (() => {
+       const tab = tabs.find((item) => item.id === pendingExternalChange.tabId);
+       if (!tab) {
+         return null;
+       }
+       const unavailable = pendingExternalChange.state === null;
+       return (
+         <div className="modal-backdrop" role="presentation">
+           <section
+             className="confirm-dialog"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="external-change-title"
+             onPointerDown={(event) => event.stopPropagation()}
+           >
+             <h2 id="external-change-title">
+               {unavailable ? "文件已被删除或移动" : "文件已被外部修改"}
+             </h2>
+             <p>
+               “{tab.tabTitle ?? tab.name}”
+               {unavailable
+                 ? " 已不在原来的磁盘位置，无法重新加载。"
+                 : ` 已被其他程序修改。是否重新加载磁盘中的内容？${isTabDirty(tab) ? " 当前未保存的修改将会丢失。" : ""}`}
+             </p>
+             <div className="confirm-actions">
+               {unavailable ? (
+                 <button className="primary-action" onClick={dismissExternalChange}>知道了</button>
+               ) : (
+                 <>
+                   <button className="primary-action" onClick={() => void reloadExternalChange()}>重新加载</button>
+                   <button onClick={dismissExternalChange}>暂不重载</button>
+                 </>
+               )}
              </div>
            </section>
          </div>

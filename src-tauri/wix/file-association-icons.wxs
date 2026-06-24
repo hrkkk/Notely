@@ -46,12 +46,19 @@
         <RegistryValue Root="HKCR" Key="Notely.lua\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
         <RegistryValue Root="HKCR" Key="Notely.kt\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
         <RegistryValue Root="HKCR" Key="Notely.kts\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
+        <RegistryValue Root="HKCR" Key="Applications\notely.exe\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
+      </Component>
+      <Component Id="NotelyOpenWithContextMenuRegistry" Guid="*" Win64="yes">
+        <RegistryValue Root="HKCR" Key="*\shell\Notely.OpenWith" Name="MUIVerb" Type="string" Value="Open with Notely" KeyPath="yes" />
+        <RegistryValue Root="HKCR" Key="*\shell\Notely.OpenWith" Name="Icon" Type="string" Value="[INSTALLDIR]notely.exe,0" />
+        <RegistryValue Root="HKCR" Key="*\shell\Notely.OpenWith\command" Type="string" Value="&quot;[INSTALLDIR]notely.exe&quot; &quot;%1&quot;" />
       </Component>
     </DirectoryRef>
   </Fragment>
   <Fragment>
     <ComponentGroup Id="NotelyFileAssociationIcons">
       <ComponentRef Id="NotelyFileAssociationIconRegistry" />
+      <ComponentRef Id="NotelyOpenWithContextMenuRegistry" />
     </ComponentGroup>
   </Fragment>
 </Wix>
