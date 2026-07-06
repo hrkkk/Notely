@@ -66,9 +66,11 @@ import {
   loadFontChoice,
   loadLanguageFontChoices,
   loadStartupPolicy,
+  loadTabSize,
   saveFontChoice,
   saveLanguageFontChoices,
-  saveStartupPolicy
+  saveStartupPolicy,
+  saveTabSize
 } from "./storage/settings";
 import {
   createEmptyTab,
@@ -122,7 +124,10 @@ const markerColors = [
   { label: "绿色标记", value: "rgba(102, 187, 106, 0.45)" },
   { label: "蓝色标记", value: "rgba(66, 165, 245, 0.42)" },
   { label: "粉色标记", value: "rgba(236, 64, 122, 0.38)" },
-  { label: "紫色标记", value: "rgba(171, 71, 188, 0.38)" }
+  { label: "紫色标记", value: "rgba(171, 71, 188, 0.38)" },
+  { label: "橙色标记", value: "rgba(255, 152, 0, 0.45)" },
+  { label: "青色标记", value: "rgba(38, 198, 218, 0.42)" },
+  { label: "红色标记", value: "rgba(239, 83, 80, 0.40)" }
 ];
 
 function positionContextMenu(x: number, y: number, estimatedHeight = 300) {
@@ -177,6 +182,7 @@ export default function App() {
   const [moreMenu, setMoreMenu] = useState<MoreMenuState>(null);
   const [systemFonts, setSystemFonts] = useState<string[]>(fallbackFontFamilies);
   const [wordWrap, setWordWrap] = useState(false);
+  const [tabSize, setTabSize] = useState(() => loadTabSize());
   const [displayOptions, setDisplayOptions] = useState({
     showSpaces: false,
     showLineBreaks: false,
@@ -1777,18 +1783,6 @@ export default function App() {
             <SaveAll size={17} />
           </button>
           <button
-            title="行操作"
-            onClick={(event) => {
-              event.stopPropagation();
-              const rect = event.currentTarget.getBoundingClientRect();
-              setTabContextMenu(null);
-              setMoreMenu(null);
-              setLineMenu({ x: rect.left, y: rect.bottom + 6 });
-            }}
-          >
-            <List size={17} />
-          </button>
-          <button
             title="显示更多"
             onClick={(event) => {
               event.stopPropagation();
@@ -1889,7 +1883,7 @@ export default function App() {
           aria-label="当前软件版本"
           title="当前软件版本"
         >
-          v2.8
+          v2.9
         </span>
         <button
           className={wordWrap ? "toggle is-active" : "toggle"}
@@ -1962,6 +1956,7 @@ export default function App() {
                 content={activeTab.content}
                 viewState={activeTab.viewState}
                 wordWrap={wordWrap}
+                tabSize={tabSize}
                 displayOptions={displayOptions}
                 matches={matches}
                 currentMatchIndex={currentMatchIndex}
@@ -2382,6 +2377,24 @@ export default function App() {
                       checked={wordWrap}
                       onChange={(event) => setWordWrap(event.target.checked)}
                     />
+                  </label>
+                  <label className="setting-row">
+                    <span>
+                      <strong>Tab 键宽度</strong>
+                      <small>设置制表符在编辑器中占用的空格数。</small>
+                    </span>
+                    <select
+                      value={tabSize}
+                      onChange={(event) => {
+                        const value = Number(event.target.value);
+                        setTabSize(value);
+                        saveTabSize(value);
+                      }}
+                    >
+                      <option value={2}>2 个空格</option>
+                      <option value={4}>4 个空格</option>
+                      <option value={8}>8 个空格</option>
+                    </select>
                   </label>
                   <label className="setting-row">
                     <span>

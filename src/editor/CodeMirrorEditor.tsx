@@ -3,6 +3,7 @@ import { defaultKeymap, historyKeymap, indentWithTab, toggleComment } from "@cod
 import { Compartment, EditorState, Extension, Prec, StateField, RangeSetBuilder } from "@codemirror/state";
 import { EditorView, Decoration, DecorationSet, WidgetType, ViewPlugin, ViewUpdate, keymap } from "@codemirror/view";
 import { highlightSelectionMatches } from "@codemirror/search";
+import { indentUnit } from "@codemirror/language";
 import { CSSProperties, WheelEvent, forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { getLanguageExtensions } from "../languages/extensions";
 import { createSearchDecorations } from "../search/decorations";
@@ -597,6 +598,7 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
   content,
   viewState,
   wordWrap,
+  tabSize,
   displayOptions,
   matches,
   currentMatchIndex,
@@ -618,6 +620,7 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
   const viewRef = useRef<EditorView | null>(null);
   const contentRef = useRef(content);
   const wrapCompartmentRef = useRef(new Compartment());
+  const tabSizeCompartmentRef = useRef(new Compartment());
   const decorationCompartmentRef = useRef(new Compartment());
   const displayCompartmentRef = useRef(new Compartment());
   const customRegexCompartmentRef = useRef(new Compartment());
@@ -851,6 +854,10 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
           scrollStateListener,
           highlightSelectionMatches({ wholeWords: true }),
           wrapCompartmentRef.current.of(wordWrap ? EditorView.lineWrapping : []),
+          tabSizeCompartmentRef.current.of([
+            EditorState.tabSize.of(tabSize),
+            indentUnit.of(" ".repeat(tabSize))
+          ]),
           decorationCompartmentRef.current.of(searchDecorationField),
           displayCompartmentRef.current.of(Prec.highest(displayBackgroundsExtension(displayOptions))),
           customRegexCompartmentRef.current.of(customRegexDecorationField),
@@ -909,6 +916,20 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
     });
     requestAnimationFrame(() => view.requestMeasure());
   }, [wordWrap]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) {
+      return;
+    }
+    view.dispatch({
+      effects: tabSizeCompartmentRef.current.reconfigure([
+        EditorState.tabSize.of(tabSize),
+        indentUnit.of(" ".repeat(tabSize))
+      ])
+    });
+    requestAnimationFrame(() => view.requestMeasure());
+  }, [tabSize]);
 
   useEffect(() => {
     const view = viewRef.current;

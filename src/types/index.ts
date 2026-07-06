@@ -109,6 +109,7 @@ export type CodeMirrorEditorProps = {
   content: string;
   viewState?: EditorViewState;
   wordWrap: boolean;
+  tabSize: number;
   displayOptions: EditorDisplayOptions;
   matches: SearchMatch[];
   currentMatchIndex: number;

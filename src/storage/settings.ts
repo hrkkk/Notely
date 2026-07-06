@@ -3,7 +3,8 @@ import {
   fontSettingsKey,
   fontSizes,
   languageFontSettingsKey,
-  startupPolicyKey
+  startupPolicyKey,
+  tabSizeKey
 } from "../constants";
 import type { FontChoice, LanguageFontChoice, StartupPolicy } from "../types";
 
@@ -52,11 +53,22 @@ function saveStartupPolicy(policy: StartupPolicy) {
   window.localStorage.setItem(startupPolicyKey, policy);
 }
 
+function loadTabSize() {
+  const value = Number(window.localStorage.getItem(tabSizeKey));
+  return value === 2 || value === 8 ? value : 4;
+}
+
+function saveTabSize(tabSize: number) {
+  window.localStorage.setItem(tabSizeKey, String(tabSize));
+}
+
 export {
   loadFontChoice,
   loadLanguageFontChoices,
   saveFontChoice,
   saveLanguageFontChoices,
   loadStartupPolicy,
-  saveStartupPolicy
+  saveStartupPolicy,
+  loadTabSize,
+  saveTabSize
 };

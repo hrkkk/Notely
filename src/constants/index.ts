@@ -5,6 +5,7 @@ const untitledName = "未命名";
 const fontSettingsKey = "notely.fontSettings";
 const languageFontSettingsKey = "notely.languageFontSettings";
 const startupPolicyKey = "notely.startupPolicy";
+const tabSizeKey = "notely.tabSize";
 const sessionKey = "notely.session";
 const maxStoredSessionContentLength = 1_000_000;
 const minEditorZoom = 50;
@@ -51,6 +52,7 @@ export {
   fontSettingsKey,
   languageFontSettingsKey,
   startupPolicyKey,
+  tabSizeKey,
   sessionKey,
   maxStoredSessionContentLength,
   minEditorZoom,
