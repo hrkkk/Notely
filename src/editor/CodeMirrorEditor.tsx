@@ -1,5 +1,5 @@
 import { basicSetup } from "codemirror";
-import { defaultKeymap, historyKeymap, indentWithTab, toggleComment } from "@codemirror/commands";
+import { defaultKeymap, historyKeymap, indentLess, indentMore, toggleComment } from "@codemirror/commands";
 import { Compartment, EditorState, Extension, Prec, StateField, RangeSetBuilder } from "@codemirror/state";
 import { EditorView, Decoration, DecorationSet, WidgetType, ViewPlugin, ViewUpdate, keymap } from "@codemirror/view";
 import { highlightSelectionMatches } from "@codemirror/search";
@@ -8,6 +8,31 @@ import { CSSProperties, WheelEvent, forwardRef, useEffect, useImperativeHandle, 
 import { getLanguageExtensions } from "../languages/extensions";
 import { createSearchDecorations } from "../search/decorations";
 import type { CodeMirrorEditorHandle, CodeMirrorEditorProps, ColorMarker, CustomKeywordStyle, CustomRegexHighlight, EditorDisplayOptions, LanguageDefinition } from "../types";
+
+function shouldIndentSelectedLines(state: EditorState) {
+  return state.selection.ranges.some((range) => {
+    if (range.empty) {
+      return false;
+    }
+
+    const startLine = state.doc.lineAt(range.from);
+    const endLine = state.doc.lineAt(range.to);
+    const spansMultipleLines = startLine.number !== endLine.number;
+    const selectsWholeLine = range.from === startLine.from && range.to === endLine.to;
+
+    return spansMultipleLines || selectsWholeLine;
+  });
+}
+
+function insertSpacesOrIndent(view: EditorView) {
+  if (shouldIndentSelectedLines(view.state)) {
+    return indentMore(view);
+  }
+
+  const spaces = " ".repeat(view.state.facet(EditorState.tabSize));
+  view.dispatch(view.state.replaceSelection(spaces));
+  return true;
+}
 
 class InlineSymbolWidget extends WidgetType {
   constructor(private readonly symbol: string, private readonly className: string) {
@@ -844,7 +869,11 @@ export default forwardRef<CodeMirrorEditorHandle, CodeMirrorEditorProps>(functio
               key: "Ctrl-/",
               run: toggleComment
             },
-            indentWithTab
+            {
+              key: "Tab",
+              run: insertSpacesOrIndent,
+              shift: indentLess
+            }
           ])),
           basicSetup,
           keymap.of([...defaultKeymap, ...historyKeymap]),

@@ -29,7 +29,34 @@
     "bundle":  {
                    "active":  true,
                    "resources":  {
-                                      "icons/file_logo.ico":  "file_logo.ico"
+                                      "icons/file-types/cs.ico":  "file-icons/cs.ico",
+                                      "icons/file-types/cpp.ico":  "file-icons/cpp.ico",
+                                      "icons/file-types/c.ico":  "file-icons/c.ico",
+                                      "icons/file-types/h.ico":  "file-icons/h.ico",
+                                      "icons/file-types/css.ico":  "file-icons/css.ico",
+                                      "icons/file-types/sass.ico":  "file-icons/sass.ico",
+                                      "icons/file-types/less.ico":  "file-icons/less.ico",
+                                      "icons/file-types/go.ico":  "file-icons/go.ico",
+                                      "icons/file-types/html.ico":  "file-icons/html.ico",
+                                      "icons/file-types/java.ico":  "file-icons/java.ico",
+                                      "icons/file-types/js.ico":  "file-icons/js.ico",
+                                      "icons/file-types/jsx.ico":  "file-icons/jsx.ico",
+                                      "icons/file-types/ts.ico":  "file-icons/ts.ico",
+                                      "icons/file-types/tsx.ico":  "file-icons/tsx.ico",
+                                      "icons/file-types/json.ico":  "file-icons/json.ico",
+                                      "icons/file-types/lua.ico":  "file-icons/lua.ico",
+                                      "icons/file-types/markdown.ico":  "file-icons/markdown.ico",
+                                      "icons/file-types/php.ico":  "file-icons/php.ico",
+                                      "icons/file-types/powershell.ico":  "file-icons/powershell.ico",
+                                      "icons/file-types/py.ico":  "file-icons/py.ico",
+                                      "icons/file-types/ruby.ico":  "file-icons/ruby.ico",
+                                      "icons/file-types/rust.ico":  "file-icons/rust.ico",
+                                      "icons/file-types/shell.ico":  "file-icons/shell.ico",
+                                      "icons/file-types/svg.ico":  "file-icons/svg.ico",
+                                      "icons/file-types/toml.ico":  "file-icons/toml.ico",
+                                      "icons/file-types/txt.ico":  "file-icons/txt.ico",
+                                      "icons/file-types/xml.ico":  "file-icons/xml.ico",
+                                      "icons/file-types/yaml.ico":  "file-icons/yaml.ico"
                                   },
                    "targets":  [
                                    "msi"

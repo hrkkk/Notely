@@ -1783,6 +1783,18 @@ export default function App() {
             <SaveAll size={17} />
           </button>
           <button
+            title="行操作"
+            onClick={(event) => {
+              event.stopPropagation();
+              const rect = event.currentTarget.getBoundingClientRect();
+              setTabContextMenu(null);
+              setMoreMenu(null);
+              setLineMenu({ x: rect.left, y: rect.bottom + 6, source: "toolbar" });
+            }}
+          >
+            <List size={17} />
+          </button>
+          <button
             title="显示更多"
             onClick={(event) => {
               event.stopPropagation();
@@ -1974,7 +1986,7 @@ export default function App() {
                   const position = positionContextMenu(x, y, 360);
                   setTabContextMenu(null);
                   setMoreMenu(null);
-                  setLineMenu(position);
+                  setLineMenu({ ...position, source: "selection" });
                 }}
                 onViewStateChange={updateActiveViewState}
                 onZoomWheel={handleEditorWheel}
@@ -2225,7 +2237,14 @@ export default function App() {
          onClick={(event) => event.stopPropagation()}
          onPointerDown={(event) => event.stopPropagation()}
        >
-         {editorRef.current?.getSelectionRange().start !== editorRef.current?.getSelectionRange().end ? (
+         {lineMenu.source === "toolbar" ? (
+           <>
+             <button onClick={() => { void copyLines("random"); setLineMenu(null); }}>随机复制N行</button>
+             <button onClick={() => { void copyLines("odd"); setLineMenu(null); }}>复制奇数行</button>
+             <button onClick={() => { void copyLines("even"); setLineMenu(null); }}>复制偶数行</button>
+             <button onClick={() => { deleteEmptyLines(); setLineMenu(null); }}>删除空行</button>
+           </>
+         ) : (
            <>
              <button onClick={() => { void copySelection(); setLineMenu(null); }}>复制</button>
              <button onClick={() => { void cutSelection(); setLineMenu(null); }}>剪切</button>
@@ -2250,31 +2269,22 @@ export default function App() {
                </div>
              </div>
              <div className="context-menu-separator" />
-           </>
-         ) : null}
-         <div className="context-menu-submenu">
-           <button className="context-menu-submenu-trigger">
-             行操作
-             <span className="context-menu-arrow">›</span>
-           </button>
-           <div className="context-submenu-panel">
-             <button onClick={() => { void copyLines("random"); setLineMenu(null); }}>随机复制N行</button>
-             <button onClick={() => { void copyLines("odd"); setLineMenu(null); }}>复制奇数行</button>
-             <button onClick={() => { void copyLines("even"); setLineMenu(null); }}>复制偶数行</button>
-             <button onClick={() => { deleteEmptyLines(); setLineMenu(null); }}>删除空行</button>
-             {editorRef.current?.getSelectionRange().start !== editorRef.current?.getSelectionRange().end ? (
-               <>
-                 <div className="context-menu-separator" />
+             <div className="context-menu-submenu">
+               <button className="context-menu-submenu-trigger">
+                 行操作
+                 <span className="context-menu-arrow">›</span>
+               </button>
+               <div className="context-submenu-panel">
                  <button onClick={() => { highlightSelectedLines(); setLineMenu(null); }}>高亮所在行</button>
                  <button onClick={() => { void copySelectedLines(); setLineMenu(null); }}>复制所在行</button>
                  <button onClick={() => { deleteSelectedLines(); setLineMenu(null); }}>删除所在行</button>
                  <button onClick={() => { keepSelectedLines(); setLineMenu(null); }}>删除所在行之外的行</button>
                  <button onClick={() => { trimSelectedLineEdges("start"); setLineMenu(null); }}>删除行首空格</button>
                  <button onClick={() => { trimSelectedLineEdges("end"); setLineMenu(null); }}>删除行尾空格</button>
-               </>
-             ) : null}
-           </div>
-         </div>
+               </div>
+             </div>
+           </>
+         )}
        </div>
      ) : null}
 

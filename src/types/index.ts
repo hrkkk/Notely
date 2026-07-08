@@ -62,7 +62,11 @@ export type PopupMenuState = {
   y: number;
 } | null;
 
-export type LineMenuState = PopupMenuState;
+export type LineMenuState = {
+  x: number;
+  y: number;
+  source: "toolbar" | "selection";
+} | null;
 export type MoreMenuState = PopupMenuState;
 
 export type EditorDisplayOptions = {

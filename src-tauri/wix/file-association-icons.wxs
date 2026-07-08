@@ -3,50 +3,50 @@
   <Fragment>
     <DirectoryRef Id="INSTALLDIR">
       <Component Id="NotelyFileAssociationIconRegistry" Guid="*" Win64="yes">
-        <RegistryValue Root="HKCR" Key="Notely.txt\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" KeyPath="yes" />
-        <RegistryValue Root="HKCR" Key="Notely.log\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.js\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.jsx\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.mjs\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.cjs\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.ts\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.tsx\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.py\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.pyw\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.java\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.c\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.cpp\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.cc\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.cxx\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.hpp\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.hxx\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.h\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.cs\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.rs\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.go\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.sh\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.bash\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.zsh\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.ps1\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.sql\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.html\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.htm\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.xml\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.svg\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.css\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.scss\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.less\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.json\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.yaml\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.yml\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.md\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.markdown\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.rb\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.php\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.lua\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.kt\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Notely.kts\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
-        <RegistryValue Root="HKCR" Key="Applications\notely.exe\DefaultIcon" Type="string" Value="[INSTALLDIR]file_logo.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.txt\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\txt.ico,0" KeyPath="yes" />
+        <RegistryValue Root="HKCR" Key="Notely.log\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\txt.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.js\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\js.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.jsx\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\jsx.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.mjs\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\js.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.cjs\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\js.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.ts\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\ts.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.tsx\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\tsx.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.py\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\py.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.pyw\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\py.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.java\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\java.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.c\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\c.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.cpp\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\cpp.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.cc\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\cpp.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.cxx\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\cpp.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.hpp\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\cpp.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.hxx\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\cpp.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.h\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\h.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.cs\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\cs.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.rs\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\rust.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.go\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\go.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.sh\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\shell.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.bash\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\shell.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.zsh\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\shell.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.ps1\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\powershell.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.sql\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\txt.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.html\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\html.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.htm\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\html.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.xml\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\xml.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.svg\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\svg.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.css\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\css.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.scss\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\sass.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.less\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\less.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.json\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\json.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.yaml\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\yaml.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.yml\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\yaml.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.md\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\markdown.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.markdown\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\markdown.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.rb\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\ruby.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.php\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\php.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.lua\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\lua.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.kt\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\txt.ico,0" />
+        <RegistryValue Root="HKCR" Key="Notely.kts\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\txt.ico,0" />
+        <RegistryValue Root="HKCR" Key="Applications\notely.exe\DefaultIcon" Type="string" Value="[INSTALLDIR]notely.exe,0" />
       </Component>
       <Component Id="NotelyOpenWithContextMenuRegistry" Guid="*" Win64="yes">
         <RegistryValue Root="HKCR" Key="*\shell\Notely.OpenWith" Name="MUIVerb" Type="string" Value="Open with Notely" KeyPath="yes" />
