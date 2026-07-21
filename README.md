@@ -1,6 +1,6 @@
 # Notepad
 
-一个基于 Tauri、React 和 TypeScript 的轻量跨平台文本浏览编辑器。
+一个基于 Tauri、React 和 TypeScript 的轻量跨平台文本浏览编辑器
 
 ## 当前功能
 
