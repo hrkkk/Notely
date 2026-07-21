@@ -1,4 +1,4 @@
-import { listen } from "@tauri-apps/api/event";
+﻿import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -19,11 +19,13 @@ import {
 import {
   CSSProperties,
   MouseEvent,
+  ReactNode,
   Suspense,
   WheelEvent,
   lazy,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
@@ -130,15 +132,45 @@ const markerColors = [
   { label: "红色标记", value: "rgba(239, 83, 80, 0.40)" }
 ];
 
-function positionContextMenu(x: number, y: number, estimatedHeight = 300) {
-  const margin = 8;
-  const menuWidth = 220;
-  return {
-    x: Math.min(x, Math.max(margin, window.innerWidth - menuWidth - margin)),
-    y: y + estimatedHeight > window.innerHeight
-      ? Math.max(margin, y - estimatedHeight)
-      : y
-  };
+type ContextMenuProps = {
+  children: ReactNode;
+  className?: string;
+  x: number;
+  y: number;
+};
+
+function ContextMenu({ children, className = "", x, y }: ContextMenuProps) {
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!menu) {
+      return;
+    }
+
+    const margin = 8;
+    const { width, height } = menu.getBoundingClientRect();
+    const left = Math.min(Math.max(margin, x), Math.max(margin, window.innerWidth - width - margin));
+    const top = y + height + margin > window.innerHeight
+      ? Math.max(margin, y - height)
+      : Math.max(margin, y);
+
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+    menu.style.visibility = "visible";
+  }, [x, y]);
+
+  return (
+    <div
+      ref={menuRef}
+      className={`context-menu${className ? ` ${className}` : ""}`}
+      style={{ left: x, top: y, visibility: "hidden" }}
+      onClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      {children}
+    </div>
+  );
 }
 
 export default function App() {
@@ -997,7 +1029,11 @@ export default function App() {
     setSearchWidgetMode(mode);
     setIsSearchWidgetOpen(true);
     requestAnimationFrame(() => {
-      document.getElementById(mode === "replace" ? "replace-input" : "search-input")?.focus();
+      const input = document.getElementById(
+        mode === "replace" ? "replace-input" : "search-input"
+      ) as HTMLInputElement | null;
+      input?.focus();
+      input?.select();
     });
   }, [getSelectedText]);
 
@@ -1895,7 +1931,7 @@ export default function App() {
           aria-label="当前软件版本"
           title="当前软件版本"
         >
-          v2.9
+          v3.0
         </span>
         <button
           className={wordWrap ? "toggle is-active" : "toggle"}
@@ -1983,14 +2019,14 @@ export default function App() {
                 onOpenSearchWidget={openSearchWidget}
                 onJumpToLine={jumpToLine}
                 onEditorContextMenu={(x, y) => {
-                  const position = positionContextMenu(x, y, 360);
                   setTabContextMenu(null);
                   setMoreMenu(null);
-                  setLineMenu({ ...position, source: "selection" });
+                  setLineMenu({ x, y, source: "selection" });
                 }}
                 onViewStateChange={updateActiveViewState}
                 onZoomWheel={handleEditorWheel}
-              />
+              />
+
             </Suspense>
             )}
             {isSearchWidgetOpen ? (
@@ -2209,12 +2245,7 @@ export default function App() {
          return null;
        }
        return (
-         <div
-           className="context-menu"
-           style={{ left: tabContextMenu.x, top: tabContextMenu.y }}
-           onClick={(event) => event.stopPropagation()}
-           onPointerDown={(event) => event.stopPropagation()}
-         >
+         <ContextMenu x={tabContextMenu.x} y={tabContextMenu.y}>
            <button onClick={() => { closeTab(tab.id); setTabContextMenu(null); }}>关闭</button>
            <button onClick={() => { closeOtherTabs(tab.id); setTabContextMenu(null); }}>关闭其他</button>
            <button onClick={() => { closeSavedTabs(); setTabContextMenu(null); }}>关闭已保存</button>
@@ -2226,17 +2257,12 @@ export default function App() {
            <button onClick={() => { void saveTabAs(tab); setTabContextMenu(null); }}>另存为</button>
            <button disabled={!tab.path} onClick={() => { void copyText(tab.path ?? "", "已复制文件路径"); setTabContextMenu(null); }}>复制文件路径</button>
            <button disabled={!tab.path} onClick={() => { void revealTabInFileManager(tab); setTabContextMenu(null); }}>在文件资源管理器中打开</button>
-         </div>
+         </ContextMenu>
        );
      })() : null}
 
      {lineMenu ? (
-       <div
-         className="context-menu"
-         style={{ left: lineMenu.x, top: lineMenu.y }}
-         onClick={(event) => event.stopPropagation()}
-         onPointerDown={(event) => event.stopPropagation()}
-       >
+       <ContextMenu x={lineMenu.x} y={lineMenu.y}>
          {lineMenu.source === "toolbar" ? (
            <>
              <button onClick={() => { void copyLines("random"); setLineMenu(null); }}>随机复制N行</button>
@@ -2285,16 +2311,11 @@ export default function App() {
              </div>
            </>
          )}
-       </div>
+       </ContextMenu>
      ) : null}
 
      {moreMenu ? (
-       <div
-         className="context-menu context-menu-checks"
-         style={{ left: moreMenu.x, top: moreMenu.y }}
-         onClick={(event) => event.stopPropagation()}
-         onPointerDown={(event) => event.stopPropagation()}
-       >
+       <ContextMenu className="context-menu-checks" x={moreMenu.x} y={moreMenu.y}>
          <button onClick={() => setDisplayOptions((current) => ({ ...current, showSpaces: !current.showSpaces }))}>
            <span>{displayOptions.showSpaces ? "✓" : ""}</span>显示空格
          </button>
@@ -2307,7 +2328,7 @@ export default function App() {
          <button onClick={() => setDisplayOptions((current) => ({ ...current, showIndentGuides: !current.showIndentGuides }))}>
            <span>{displayOptions.showIndentGuides ? "✓" : ""}</span>显示对齐线
          </button>
-       </div>
+       </ContextMenu>
      ) : null}
 
      {false ? (

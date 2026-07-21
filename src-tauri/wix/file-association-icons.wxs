@@ -2,6 +2,11 @@
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Fragment>
     <DirectoryRef Id="INSTALLDIR">
+      <!-- This is user-editable data. Never overwrite an existing copy during
+           install/repair, and keep it in place across uninstall/major upgrade. -->
+      <Component Id="NotelyCustomLanguagesConfig" Guid="A21EBD0F-5DAE-4AF8-977C-CBA5AE099D8C" Win64="yes" NeverOverwrite="yes" Permanent="yes">
+        <File Id="NotelyCustomLanguagesConfigFile" Source="..\..\..\..\custom-languages.template.jsonc" Name="custom-languages.json" KeyPath="yes" />
+      </Component>
       <Component Id="NotelyFileAssociationIconRegistry" Guid="*" Win64="yes">
         <RegistryValue Root="HKCR" Key="Notely.txt\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\txt.ico,0" KeyPath="yes" />
         <RegistryValue Root="HKCR" Key="Notely.log\DefaultIcon" Type="string" Value="[INSTALLDIR]file-icons\txt.ico,0" />
@@ -57,6 +62,7 @@
   </Fragment>
   <Fragment>
     <ComponentGroup Id="NotelyFileAssociationIcons">
+      <ComponentRef Id="NotelyCustomLanguagesConfig" />
       <ComponentRef Id="NotelyFileAssociationIconRegistry" />
       <ComponentRef Id="NotelyOpenWithContextMenuRegistry" />
     </ComponentGroup>

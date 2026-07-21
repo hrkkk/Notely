@@ -2130,7 +2130,7 @@ dependencies = [
 
 [[package]]
 name = "notely"
-version = "2.9.0"
+version = "3.0.0"
 dependencies = [
  "encoding_rs",
  "rfd",
